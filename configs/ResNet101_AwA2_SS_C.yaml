@@ -1,0 +1,31 @@
+ckpt_name: "ResNet101_AwA2_SS_C"
+
+dataset: "CUB"
+split: "standard_split"
+
+generalized: True
+
+FlowBlocks_architecture: "[(1, 0), (1, 0), (1, 0), (1, 0)]"
+use_attn: '[(1, 0), (0, 1), (0, 0), (0, 0)]'
+use_split: '[1, 1, 1, 0]'
+downsample: "['None', 'None', 'None', 'DCTPooling']"
+
+train:
+    batch_size: 64
+    epochs: 15
+    lr_decay: 15
+    lr: 1e-5
+    beta: 1.0
+    log_inter: 64
+    ckpt_inter: 1
+    data_aug: "resize_random_crop"
+    optimizer: 'ADAM'
+    adam_betas: [0.95, 0.99]
+    weight_decay: 1e-4
+test:
+    batch_size: 32
+    setting: "c"
+    epoch: "all"
+    imload_mode: "resize_crop"
+    save_predictions: True
+

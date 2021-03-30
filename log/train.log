@@ -1,0 +1,49 @@
+[INFO | config.py:57] 2021-01-23 22:50:01,961: {'dataset': 'CIFAR10', 'model_name': 'ResNet26', 'img_size': 32, 'batch_size': 25, 'num_workers': 0, 'epochs': 100, 'lr': 0.1, 'momentum': 0.9, 'weight_decay': 0.0001, 'print_interval': 100, 'cuda': True, 'pretrained_model': False, 'stem': False, 'distributed': False, 'gpu_devices': None, 'gpu': None, 'rank': 0, 'world_size': 1, 'dist_backend': 'nccl', 'dist_url': 'tcp://127.0.0.1:3456'}
+[INFO | main.py:120] 2021-01-23 22:54:48,270: Number of model parameters: 8306442
+[INFO | main.py:45] 2021-01-23 22:55:28,033: [Epoch    1] Loss: 2.307 Acc: 24.000%
+[INFO | main.py:48] 2021-01-23 22:55:28,034: Current learning rate is: 0.1
+[INFO | main.py:45] 2021-01-23 22:56:04,882: [Epoch    1] Loss: 2.334 Acc: 12.000%
+[INFO | main.py:48] 2021-01-23 22:56:04,883: Current learning rate is: 0.1
+[INFO | main.py:45] 2021-01-23 22:56:41,449: [Epoch    1] Loss: 2.363 Acc: 24.000%
+[INFO | main.py:48] 2021-01-23 22:56:41,450: Current learning rate is: 0.1
+[INFO | main.py:45] 2021-01-23 22:57:18,448: [Epoch    1] Loss: 2.040 Acc: 28.000%
+[INFO | main.py:48] 2021-01-23 22:57:18,448: Current learning rate is: 0.1
+[INFO | main.py:45] 2021-01-23 22:57:55,446: [Epoch    1] Loss: 2.077 Acc: 28.000%
+[INFO | main.py:48] 2021-01-23 22:57:55,446: Current learning rate is: 0.1
+[INFO | main.py:45] 2021-01-23 22:58:32,341: [Epoch    1] Loss: 1.744 Acc: 32.000%
+[INFO | main.py:48] 2021-01-23 22:58:32,342: Current learning rate is: 0.1
+[INFO | main.py:45] 2021-01-23 22:59:09,731: [Epoch    1] Loss: 1.728 Acc: 44.000%
+[INFO | main.py:48] 2021-01-23 22:59:09,731: Current learning rate is: 0.1
+[INFO | main.py:45] 2021-01-23 22:59:46,994: [Epoch    1] Loss: 2.105 Acc: 24.000%
+[INFO | main.py:48] 2021-01-23 22:59:46,994: Current learning rate is: 0.1
+[INFO | main.py:45] 2021-01-23 23:00:23,863: [Epoch    1] Loss: 2.005 Acc: 24.000%
+[INFO | main.py:48] 2021-01-23 23:00:23,864: Current learning rate is: 0.1
+[INFO | main.py:45] 2021-01-23 23:01:01,044: [Epoch    1] Loss: 1.847 Acc: 32.000%
+[INFO | main.py:48] 2021-01-23 23:01:01,045: Current learning rate is: 0.1
+[INFO | main.py:45] 2021-01-23 23:01:37,464: [Epoch    1] Loss: 1.818 Acc: 36.000%
+[INFO | main.py:48] 2021-01-23 23:01:37,464: Current learning rate is: 0.1
+[INFO | main.py:45] 2021-01-23 23:02:14,289: [Epoch    1] Loss: 1.659 Acc: 32.000%
+[INFO | main.py:48] 2021-01-23 23:02:14,289: Current learning rate is: 0.1
+[INFO | main.py:45] 2021-01-23 23:02:51,171: [Epoch    1] Loss: 1.875 Acc: 32.000%
+[INFO | main.py:48] 2021-01-23 23:02:51,171: Current learning rate is: 0.1
+[INFO | main.py:45] 2021-01-23 23:03:28,410: [Epoch    1] Loss: 1.784 Acc: 24.000%
+[INFO | main.py:48] 2021-01-23 23:03:28,410: Current learning rate is: 0.1
+[INFO | main.py:45] 2021-01-23 23:04:05,093: [Epoch    1] Loss: 1.617 Acc: 48.000%
+[INFO | main.py:48] 2021-01-23 23:04:05,093: Current learning rate is: 0.1
+[INFO | main.py:45] 2021-01-23 23:04:41,873: [Epoch    1] Loss: 1.796 Acc: 36.000%
+[INFO | main.py:48] 2021-01-23 23:04:41,873: Current learning rate is: 0.1
+[INFO | main.py:45] 2021-01-23 23:05:19,186: [Epoch    1] Loss: 1.905 Acc: 20.000%
+[INFO | main.py:48] 2021-01-23 23:05:19,186: Current learning rate is: 0.1
+[INFO | main.py:45] 2021-01-23 23:05:56,368: [Epoch    1] Loss: 1.501 Acc: 32.000%
+[INFO | main.py:48] 2021-01-23 23:05:56,368: Current learning rate is: 0.1
+[INFO | main.py:45] 2021-01-23 23:06:33,839: [Epoch    1] Loss: 1.634 Acc: 40.000%
+[INFO | main.py:48] 2021-01-23 23:06:33,840: Current learning rate is: 0.1
+[INFO | main.py:45] 2021-01-23 23:07:10,495: [Epoch    1] Loss: 1.932 Acc: 32.000%
+[INFO | main.py:48] 2021-01-23 23:07:10,496: Current learning rate is: 0.1
+[INFO | main.py:45] 2021-01-23 23:08:24,337: [Epoch    2] Loss: 1.598 Acc: 44.000%
+[INFO | main.py:48] 2021-01-23 23:08:24,337: Current learning rate is: 0.1
+[INFO | main.py:45] 2021-01-23 23:09:01,081: [Epoch    2] Loss: 2.085 Acc: 24.000%
+[INFO | main.py:48] 2021-01-23 23:09:01,081: Current learning rate is: 0.1
+[INFO | config.py:57] 2021-01-23 23:09:29,251: {'dataset': 'CIFAR10', 'model_name': 'ResNet26', 'img_size': 32, 'batch_size': 25, 'num_workers': 0, 'epochs': 100, 'lr': 0.1, 'momentum': 0.9, 'weight_decay': 0.0001, 'print_interval': 100, 'cuda': True, 'pretrained_model': False, 'stem': False, 'distributed': False, 'gpu_devices': None, 'gpu': None, 'rank': 0, 'world_size': 1, 'dist_backend': 'nccl', 'dist_url': 'tcp://127.0.0.1:3456'}
+[INFO | main.py:120] 2021-01-23 23:10:19,003: Number of model parameters: 8306442
+[INFO | config.py:57] 2021-01-24 15:47:17,281: {'dataset': 'CIFAR10', 'model_name': 'ResNet26', 'img_size': 32, 'batch_size': 25, 'num_workers': 0, 'epochs': 100, 'lr': 0.1, 'momentum': 0.9, 'weight_decay': 0.0001, 'print_interval': 100, 'cuda': True, 'pretrained_model': False, 'stem': False, 'distributed': False, 'gpu_devices': None, 'gpu': None, 'rank': 0, 'world_size': 1, 'dist_backend': 'nccl', 'dist_url': 'tcp://127.0.0.1:3456'}
