@@ -255,9 +255,8 @@ class AutoEncoder(nn.Module):
 
         # stochastic_decoder
         encoded_local_feature = s
-        mu1, log_var1, mu2, log_var2 = torch.chunk(s, 4, dim=1)
-        z_local = self.reparametrization(mu1, log_var1)
-        r = self.reparametrization(mu2, log_var2)
+        mu, log_var = torch.chunk(s, 2, dim=1)
+        z_local = self.reparametrization(mu, log_var)
 
         # down sample
         s = self.down1(s)

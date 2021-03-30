@@ -255,19 +255,15 @@ class AutoEncoder(nn.Module):
 
         # stochastic_decoder
         encoded_local_feature = s
-        mu1, log_var1, mu2, log_var2 = torch.chunk(s, 4, dim=1)
-        z_local = self.reparametrization(mu1, log_var1)
-        r = self.reparametrization(mu2, log_var2)
-
-        # down sample
         s = self.down1(s)
         s = self.enc(s)
         s = self.down2(s)
-        mu, log_var = torch.chunk(s, 2, dim=1)
-        z_global = self.reparametrization(mu, log_var)
-        self.inn_prior_sampler(z_global)
-
+        mu_p, log_var_p = torch.chunk(s, 2, dim=1)
+        
         self.combiner_enc
+
+        z_non_local = self.reparametrization(mu_p, log_var_p)
+        self.inn_prior_sampler(z_non_local)
 
         idx_dec = 0
         for cell in self.stochastic_decoder:

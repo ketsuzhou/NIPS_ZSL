@@ -84,9 +84,9 @@ class AutoEncoder(nn.Module):
             self.condition_encoder, self.inn_prior_sampler, args.attribute)
 
         # init decoder
-        self.num_deterministic_decoder = self.num_deterministic_encoder
         self.stochastic_decoder, mult = self.init_stochastic_decoder(mult)
-        self.deterministic_decoder, mult = self.init_deterministic_decoder(mult)
+        self.deterministic_decoder, mult = self.init_deterministic_decoder(
+            mult)
 
         self.image_conditional = self.init_image_conditional(mult)
 
@@ -202,7 +202,6 @@ class AutoEncoder(nn.Module):
             num_InvAutoFC=1,
             in_chan_condition=None)
 
-
     def init_stochastic_decoder(self):
         half_in_chan_stoch_enc = self.in_chan_stoch_enc / 2
         self.up1 = Cell(half_in_chan_stoch_enc,
@@ -239,35 +238,36 @@ class AutoEncoder(nn.Module):
                         use_se=self.use_se)
             mult *= 2
         deterministic_decoder.append(cell)
-        return deterministic_decoder, mult
 
+        return deterministic_decoder, mult
 
     def reparametrization(mu, logvar):
         std = 0.5 * torch.exp(logvar)
         z = torch.randn(std.size()) * std + mu
         return z
 
-
     def forward(self, x):
-        # perform deterministic_encoder
+        # perform pre-processing
         for cell in self.deterministic_encoder:
             s = cell(s)
 
-        # stochastic_decoder
-        encoded_local_feature = s
-        mu1, log_var1, mu2, log_var2 = torch.chunk(s, 4, dim=1)
-        z_local = self.reparametrization(mu1, log_var1)
-        r = self.reparametrization(mu2, log_var2)
+        # run the main encoder tower
+        combiner_cells_enc = []
+        combiner_cells_s = []
+        for cell in self.stochastic_encoder:
+            if cell.cell_type == 'combiner_enc':
+                combiner_cells_enc.append(cell)
+                combiner_cells_s.append(s)
+            else:
+                s = cell(s)
 
-        # down sample
-        s = self.down1(s)
-        s = self.enc(s)
-        s = self.down2(s)
-        mu, log_var = torch.chunk(s, 2, dim=1)
-        z_global = self.reparametrization(mu, log_var)
-        self.inn_prior_sampler(z_global)
+        # reverse combiner cells and their input for decoder
+        combiner_cells_enc.reverse()
+        combiner_cells_s.reverse()
 
-        self.combiner_enc
+        mu_p, log_var_p = torch.chunk(s, 2, dim=1)
+        z_non_local = self.reparametrization(mu_p, log_var_p)
+        self.inn_prior_sampler(z_non_local)
 
         idx_dec = 0
         for cell in self.stochastic_decoder:

@@ -84,9 +84,9 @@ class AutoEncoder(nn.Module):
             self.condition_encoder, self.inn_prior_sampler, args.attribute)
 
         # init decoder
-        self.num_deterministic_decoder = self.num_deterministic_encoder
         self.stochastic_decoder, mult = self.init_stochastic_decoder(mult)
-        self.deterministic_decoder, mult = self.init_deterministic_decoder(mult)
+        self.deterministic_decoder, mult = self.init_deterministic_decoder(
+            mult)
 
         self.image_conditional = self.init_image_conditional(mult)
 
@@ -113,63 +113,68 @@ class AutoEncoder(nn.Module):
     def init_deterministic_encoder(self, mult):
         deterministic_encoder = nn.ModuleList()
         for _ in range(self.num_deter_enc):
+            arch = self.arch_instance['normal_pre']
             num_ci = self.in_chan_deter_enc * mult
             cell = Cell(num_ci,
                         num_ci / 2,
                         cell_type='normal_pre',
-                        arch=self.arch_instance['normal_pre'],
+                        arch=arch,
                         use_se=self.use_se)
             mult /= 2
             deterministic_encoder.append(cell)
+
         return deterministic_encoder, mult
 
-
     def init_stochastic_encoder(self):
+        enc_tower = nn.ModuleList()
         in_chan_stoch_enc = self.in_chan_stoch_enc
         half_in_chan_stoch_enc = in_chan_stoch_enc / 2
-        self.combiner_enc = EncCombinerCell(
-            half_in_chan_stoch_enc *2,
-            half_in_chan_stoch_enc,
-            cell_type='combiner_enc')
-        self.down1 = Cell(
-            in_chan_stoch_enc,
-            half_in_chan_stoch_enc,
-            cell_type='down_enc',
-            arch=self.arch_instance['down_enc'],
-            use_se=self.use_se)
-        self.enc = Cell(
-            half_in_chan_stoch_enc,
-            half_in_chan_stoch_enc,
-            cell_type='normal_enc',
-            arch=self.arch_instance['normal_enc'],
-            use_se=self.use_se)
-        self.down2 = Cell(
-            half_in_chan_stoch_enc,
-            half_in_chan_stoch_enc,
-            cell_type='down_enc',
-            arch=self.arch_instance['down_enc'],
-            use_se=self.use_se)
+        # add encoder combiner
+        self.combiner_enc = EncCombinerCell(half_in_chan_stoch_enc *2,
+                                                    half_in_chan_stoch_enc,
+                                                    cell_type='combiner_enc')
+        # down cells 
+        arch = self.arch_instance['down_enc']
+        self.down1 = Cell(in_chan_stoch_enc,
+                            half_in_chan_stoch_enc,
+                            cell_type='down_enc',
+                            arch=arch,
+                            use_se=self.use_se)
+        # enc cells 
+        arch = self.arch_instance['normal_enc']
+        self.enc = Cell(half_in_chan_stoch_enc,
+                        half_in_chan_stoch_enc,
+                        cell_type='normal_enc',
+                        arch=arch,
+                        use_se=self.use_se)
+        # down cells 
+        arch = self.arch_instance['down_enc']
+        self.down2 = Cell(half_in_chan_stoch_enc,
+                            half_in_chan_stoch_enc,
+                            cell_type='down_enc',
+                            arch=arch,
+                            use_se=self.use_se)
 
 
     def init_pri_pos_sampler(self, args):
         in_chan_stoch_enc = self.in_chan_stoch_enc
         half_in_chan_stoch_enc = in_chan_stoch_enc / 2
-        self.local_posterior = Conv2D(
-            in_chan_stoch_enc,
-            2 * self.residul_latent_dim + 2 * self.nf_dim_local, 
-            kernel_size=3, 
-            padding=1, 
-            bias=True)
+        # local posterior
+        self.local_posterior = Conv2D(in_chan_stoch_enc,
+                        2 * self.residul_latent_dim + 2 * self.nf_dim_local, 
+                        kernel_size=3, 
+                        padding=1, 
+                        bias=True)
         # condition for local NF prior
         self.condition_encoder = nn.ModuleList(
-            nn.Sequential(
-                nn.ELU(),
-                Conv2D(
-                    half_in_chan_stoch_enc,
-                    self.in_chan_condition,
-                    kernel_size=1,
-                    padding=0,
-                    bias=True))) 
+                        nn.Sequential(
+                            nn.ELU(),
+                            Conv2D(half_in_chan_stoch_enc,
+                                    self.in_chan_condition,
+                                    kernel_size=1,
+                                    padding=0,
+                                    bias=True))) 
+        # local prior
         self.local_nf_prior = invertible_net(
             use_self_attn=args.use_self_attn,
             use_split=args.use_split,
@@ -182,12 +187,13 @@ class AutoEncoder(nn.Module):
             num_components=args.num_components,
             drop_prob=args.drop_prob,
             in_chan_condition=self.in_chan_condition)
-        self.global_posterior = Conv2D(
-            in_chan_stoch_enc,
+        # global posterior
+        self.global_posterior = Conv2D(in_chan_stoch_enc,
             2 * self.nf_dim_nonlocal, 
             kernel_size=3, 
             padding=1, 
             bias=True)
+        # global prior
         self.global_prior = invertible_net(
             use_self_attn=args.use_self_attn,
             use_split=args.use_split,
@@ -202,72 +208,92 @@ class AutoEncoder(nn.Module):
             num_InvAutoFC=1,
             in_chan_condition=None)
 
-
     def init_stochastic_decoder(self):
+        stochastic_decoder = nn.ModuleList()
         half_in_chan_stoch_enc = self.in_chan_stoch_enc / 2
-        self.up1 = Cell(half_in_chan_stoch_enc,
-            half_in_chan_stoch_enc,
-            cell_type='up_dec',
-            arch=self.arch_instance['up_dec'],
-            use_se=self.use_se)
-        self.dec = Cell(
+        arch = self.arch_instance['normal_dec']
+        self.stochastic_decoder = Cell(
             half_in_chan_stoch_enc,
             half_in_chan_stoch_enc,
             cell_type='normal_dec',
-            arch=self.arch_instance['normal_dec'],
+            arch=arch,
             use_se=self.use_se)
-        self.up2 = Cell(half_in_chan_stoch_enc,
-            half_in_chan_stoch_enc,
-            cell_type='up_dec',
-            arch=self.arch_instance['up_dec'],
-            use_se=self.use_se)
+
         self.combiner_dec = DecCombinerCell(2 * half_in_chan_stoch_enc,
-            half_in_chan_stoch_enc,
-            half_in_chan_stoch_enc,
-            cell_type='combiner_dec')
+                            half_in_chan_stoch_enc,
+                            half_in_chan_stoch_enc,
+                            cell_type='combiner_dec')
+        stochastic_decoder.append(cell)
+        # up-sampling cells after finishing a scale
+        arch = self.arch_instance['up_dec']
+        cell = Cell(half_in_chan_stoch_enc,
+                    half_in_chan_stoch_enc,
+                    cell_type='up_dec',
+                    arch=arch,
+                    use_se=self.use_se)
+        stochastic_decoder.append(cell)
+        cell = Cell(half_in_chan_stoch_enc,
+                    half_in_chan_stoch_enc,
+                    cell_type='up_dec',
+                    arch=arch,
+                    use_se=self.use_se)
+        stochastic_decoder.append(cell)
 
 
     def init_deterministic_decoder(self):
         deterministic_decoder = nn.ModuleList()
         mult = 1
-        for _ in range(self.num_deterministic_decoder):
-            num_ci = int(self.chan_in_deter_dec * mult)
-            cell = Cell(num_ci,
-                        num_ci * 2,
-                        cell_type='normal_post',
-                        arch=self.arch_instance['normal_post'],
-                        use_se=self.use_se)
-            mult *= 2
-        deterministic_decoder.append(cell)
-        return deterministic_decoder, mult
+        for b in range(self.num_postprocess_blocks):
+            for c in range(self.num_postprocess_cells):
+                if c == 0:
+                    arch = self.arch_instance['up_post']
+                    num_ci = int(self.chan_in_deter_dec * mult)
+                    cell = Cell(num_ci,
+                                num_ci / 2,
+                                cell_type='up_post',
+                                arch=arch,
+                                use_se=self.use_se)
+                    mult /= 2
+                else:
+                    arch = self.arch_instance['normal_post']
+                    num_ci = int(self.chan_in_deter_dec * mult)
+                    cell = Cell(num_ci,
+                                num_ci * 2,
+                                cell_type='normal_post',
+                                arch=arch,
+                                use_se=self.use_se)
+                    mult *= 2
+                deterministic_decoder.append(cell)
 
+        return deterministic_decoder, mult
 
     def reparametrization(mu, logvar):
         std = 0.5 * torch.exp(logvar)
         z = torch.randn(std.size()) * std + mu
         return z
 
-
     def forward(self, x):
-        # perform deterministic_encoder
+        # perform pre-processing
         for cell in self.deterministic_encoder:
             s = cell(s)
 
-        # stochastic_decoder
-        encoded_local_feature = s
-        mu1, log_var1, mu2, log_var2 = torch.chunk(s, 4, dim=1)
-        z_local = self.reparametrization(mu1, log_var1)
-        r = self.reparametrization(mu2, log_var2)
+        # run the main encoder tower
+        combiner_cells_enc = []
+        combiner_cells_s = []
+        for cell in self.stochastic_encoder:
+            if cell.cell_type == 'combiner_enc':
+                combiner_cells_enc.append(cell)
+                combiner_cells_s.append(s)
+            else:
+                s = cell(s)
 
-        # down sample
-        s = self.down1(s)
-        s = self.enc(s)
-        s = self.down2(s)
-        mu, log_var = torch.chunk(s, 2, dim=1)
-        z_global = self.reparametrization(mu, log_var)
-        self.inn_prior_sampler(z_global)
+        # reverse combiner cells and their input for decoder
+        combiner_cells_enc.reverse()
+        combiner_cells_s.reverse()
 
-        self.combiner_enc
+        mu_p, log_var_p = torch.chunk(s, 2, dim=1)
+        z_non_local = self.reparametrization(mu_p, log_var_p)
+        self.inn_prior_sampler(z_non_local)
 
         idx_dec = 0
         for cell in self.stochastic_decoder:

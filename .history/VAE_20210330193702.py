@@ -253,21 +253,24 @@ class AutoEncoder(nn.Module):
         for cell in self.deterministic_encoder:
             s = cell(s)
 
-        # stochastic_decoder
+        #
         encoded_local_feature = s
-        mu1, log_var1, mu2, log_var2 = torch.chunk(s, 4, dim=1)
-        z_local = self.reparametrization(mu1, log_var1)
-        r = self.reparametrization(mu2, log_var2)
-
-        # down sample
-        s = self.down1(s)
-        s = self.enc(s)
-        s = self.down2(s)
-        mu, log_var = torch.chunk(s, 2, dim=1)
-        z_global = self.reparametrization(mu, log_var)
-        self.inn_prior_sampler(z_global)
-
         self.combiner_enc
+
+        for cell in self.stochastic_encoder:
+            if cell.cell_type == 'combiner_enc':
+                combiner_cells_enc.append(cell)
+                combiner_cells_s.append(s)
+            else:
+                s = cell(s)
+
+        # reverse combiner cells and their input for decoder
+        combiner_cells_enc.reverse()
+        combiner_cells_s.reverse()
+
+        mu_p, log_var_p = torch.chunk(s, 2, dim=1)
+        z_non_local = self.reparametrization(mu_p, log_var_p)
+        self.inn_prior_sampler(z_non_local)
 
         idx_dec = 0
         for cell in self.stochastic_decoder:

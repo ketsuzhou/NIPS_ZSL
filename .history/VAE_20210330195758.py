@@ -258,7 +258,7 @@ class AutoEncoder(nn.Module):
         mu1, log_var1, mu2, log_var2 = torch.chunk(s, 4, dim=1)
         z_local = self.reparametrization(mu1, log_var1)
         r = self.reparametrization(mu2, log_var2)
-
+        
         # down sample
         s = self.down1(s)
         s = self.enc(s)
