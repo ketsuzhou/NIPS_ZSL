@@ -129,7 +129,7 @@ class AutoEncoder(nn.Module):
         in_chan_stoch_enc = self.in_chan_stoch_enc
         half_in_chan_stoch_enc = in_chan_stoch_enc / 2
         self.combiner_enc = EncCombinerCell(
-            half_in_chan_stoch_enc,
+            half_in_chan_stoch_enc *2,
             half_in_chan_stoch_enc,
             cell_type='combiner_enc')
         self.down1 = Cell(
@@ -339,9 +339,13 @@ class AutoEncoder(nn.Module):
                 if i not in self.sr_u:
                     num_w, row, col = weights[i].shape
                     self.sr_u[i] = F.normalize(torch.ones(num_w, row).normal_(
-                        0, 1).cuda(), dim=1, eps=1e-3)
+                        0, 1).cuda(),
+                                               dim=1,
+                                               eps=1e-3)
                     self.sr_v[i] = F.normalize(torch.ones(num_w, col).normal_(
-                        0, 1).cuda(), dim=1, eps=1e-3)
+                        0, 1).cuda(),
+                                               dim=1,
+                                               eps=1e-3)
                     # increase the number of iterations for the first time
                     num_iter = 10 * self.num_power_iter
 
@@ -351,10 +355,14 @@ class AutoEncoder(nn.Module):
                     # This power iteration produces approximations of `u` and `v`.
                     self.sr_v[i] = F.normalize(
                         torch.matmul(self.sr_u[i].unsqueeze(1),
-                                     weights[i]).squeeze(1), dim=1, eps=1e-3)  # bx1xr * bxrxc --> bx1xc --> bxc
+                                     weights[i]).squeeze(1),
+                        dim=1,
+                        eps=1e-3)  # bx1xr * bxrxc --> bx1xc --> bxc
                     self.sr_u[i] = F.normalize(
                         torch.matmul(weights[i],
-                                     self.sr_v[i].unsqueeze(2)).squeeze(2), dim=1, eps=1e-3)  # bxrxc * bxcx1 --> bxrx1  --> bxr
+                                     self.sr_v[i].unsqueeze(2)).squeeze(2),
+                        dim=1,
+                        eps=1e-3)  # bxrxc * bxcx1 --> bxrx1  --> bxr
 
             sigma = torch.matmul(
                 self.sr_u[i].unsqueeze(1),

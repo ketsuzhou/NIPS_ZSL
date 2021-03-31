@@ -13,8 +13,7 @@ from util import channelwise, checkerboard, Flip, safe_log, squeeze, unsqueeze
 import FrEIA.framework as Ff
 import FrEIA.modules as Fm
 from FrEIA.framework import ConditionNode
-# from zsl_train_test import train, test
-
+from zsl_train_test import 
 clamping = 1.5
 feature_channels = 256
 fc_cond_length = 512

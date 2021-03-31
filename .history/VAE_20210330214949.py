@@ -5,7 +5,7 @@ import torch.nn as nn
 import torch.nn.functional as F
 from neural_operations import OPS, EncCombinerCell, DecCombinerCell, Conv2D, get_skip_connection, SE
 from torch.distributions.bernoulli import Bernoulli
-from neural_ar_operations import ARConv2d
+
 from utils import get_stride_for_cell_type, get_input_size, groups_per_scale, get_arch_cells
 from distributions import Normal, DiscMixLogistic
 from inplaced_sync_batchnorm import SyncBatchNormSwish
@@ -77,7 +77,6 @@ class AutoEncoder(nn.Module):
         self.nf_dim_per_scale = 32
 
         # init prior and posterior
-        self.in_chan_condition = args.in_chan_condition
         self.norm_prior_sampler, self.condition_encoder, \
             self.inn_prior_sampler, self.posterior_sampler = self.init_pri_pos_sampler(args)
 
@@ -129,7 +128,7 @@ class AutoEncoder(nn.Module):
         in_chan_stoch_enc = self.in_chan_stoch_enc
         half_in_chan_stoch_enc = in_chan_stoch_enc / 2
         self.combiner_enc = EncCombinerCell(
-            half_in_chan_stoch_enc,
+            half_in_chan_stoch_enc *2,
             half_in_chan_stoch_enc,
             cell_type='combiner_enc')
         self.down1 = Cell(
@@ -178,11 +177,11 @@ class AutoEncoder(nn.Module):
             verbose=False,
             FlowBlocks_architecture=args.FlowBlocks_architecture,
             in_shape=self.nf_in_shape,
-            in_shape_condition_node=in_shape_condition_node,
             mid_channels=args.num_channels,
             num_ConvAttnBlock=args.num_ConvAttnBlock,
             num_components=args.num_components,
-            drop_prob=args.drop_prob)
+            drop_prob=args.drop_prob,
+            in_chan_condition=self.in_chan_condition)
         self.global_posterior = Conv2D(
             in_chan_stoch_enc,
             2 * self.nf_dim_nonlocal, 
@@ -196,12 +195,12 @@ class AutoEncoder(nn.Module):
             verbose=False,
             FlowBlocks_architecture=args.FlowBlocks_architecture,
             in_shape=self.nf_in_shape,
-            in_shape_condition_node=None,
             mid_channels=args.num_channels,
             num_ConvAttnBlock=args.num_ConvAttnBlock,
             num_components=args.num_components,
             drop_prob=args.drop_prob,
-            num_InvAutoFC=1)
+            num_InvAutoFC=1,
+            in_chan_condition=None)
 
 
     def init_stochastic_decoder(self):
@@ -258,32 +257,27 @@ class AutoEncoder(nn.Module):
         s = self.down2(s)
         mu, log_var = torch.chunk(s, 2, dim=1)
         z_global_dis = Normal(mu, log_var)
-        z_global_sample = z_global_dis.sample
-        # global_nf_prior
-        z_loss1 = self.global_nf_prior(z_global_sample)
+        z_global_dis.sample = z_global_dis.sample
+        z_loss1 = self.global_nf_prior(z_global_dis.sample)
         # decode
-        s = self.up1(z_global_sample)
+        s = self.up1(z_global)
         s = self.dec(s)
         decoded_feature = self.up2(s)
         s = self.combiner_enc(encoded_feature, decoded_feature)
         mu1, log_var1, mu2, log_var2 = torch.chunk(s, 4, dim=1)
         z_local = Normal(mu1, log_var1)
         z_local_sample = z_local.sample
-        # local_nf_prior
+        # nf prior
         local_nf_condition = self.condition_encoder(decoded_feature)
-        z_loss2 = self.local_nf_prior_z(local_nf_condition, z_local_sample)
-        # r prior
+        z_loss2 = self.local_nf_prior_z(local_nf_condition, z_local.sample)
+        
         r = Normal(mu2, log_var2)
-        # concat as short-cut
         s = torch.cat(decoded_feature, z_local, r, dim=1)
 
         # perform deterministic_decoder
         for cell in self.deterministic_decoder:
             s = cell(s)
-	    rec_loss = torch.sum(torch.abs(x - s), dim=(1, 2, 3)) / batch_size
-        
-        return rec_loss, z_loss1, z_loss2
-
+	    rec_loss = torch.sum(torch.abs(x - s), dim=(1,2,3)) / batch_size 
 
     def sample(self, num_samples, t):
         scale_ind = 0
@@ -339,9 +333,13 @@ class AutoEncoder(nn.Module):
                 if i not in self.sr_u:
                     num_w, row, col = weights[i].shape
                     self.sr_u[i] = F.normalize(torch.ones(num_w, row).normal_(
-                        0, 1).cuda(), dim=1, eps=1e-3)
+                        0, 1).cuda(),
+                                               dim=1,
+                                               eps=1e-3)
                     self.sr_v[i] = F.normalize(torch.ones(num_w, col).normal_(
-                        0, 1).cuda(), dim=1, eps=1e-3)
+                        0, 1).cuda(),
+                                               dim=1,
+                                               eps=1e-3)
                     # increase the number of iterations for the first time
                     num_iter = 10 * self.num_power_iter
 
@@ -351,10 +349,14 @@ class AutoEncoder(nn.Module):
                     # This power iteration produces approximations of `u` and `v`.
                     self.sr_v[i] = F.normalize(
                         torch.matmul(self.sr_u[i].unsqueeze(1),
-                                     weights[i]).squeeze(1), dim=1, eps=1e-3)  # bx1xr * bxrxc --> bx1xc --> bxc
+                                     weights[i]).squeeze(1),
+                        dim=1,
+                        eps=1e-3)  # bx1xr * bxrxc --> bx1xc --> bxc
                     self.sr_u[i] = F.normalize(
                         torch.matmul(weights[i],
-                                     self.sr_v[i].unsqueeze(2)).squeeze(2), dim=1, eps=1e-3)  # bxrxc * bxcx1 --> bxrx1  --> bxr
+                                     self.sr_v[i].unsqueeze(2)).squeeze(2),
+                        dim=1,
+                        eps=1e-3)  # bxrxc * bxcx1 --> bxrx1  --> bxr
 
             sigma = torch.matmul(
                 self.sr_u[i].unsqueeze(1),

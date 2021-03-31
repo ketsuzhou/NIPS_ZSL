@@ -13,7 +13,6 @@ from util import channelwise, checkerboard, Flip, safe_log, squeeze, unsqueeze
 import FrEIA.framework as Ff
 import FrEIA.modules as Fm
 from FrEIA.framework import ConditionNode
-# from zsl_train_test import train, test
 
 clamping = 1.5
 feature_channels = 256
@@ -59,27 +58,34 @@ class invertible_net(Ff.ReversibleGraphNet):
                                     mid_channels=mid_channels,
                                     num_ConvAttnBlock=num_ConvAttnBlock,
                                     num_components=num_components,
-                                    use_attn=0,
+                                    use_attn=use_attn[block_index],
                                     drop_prob=drop_prob)
                 nodes, in_shape = reduce_spacial_dimension(nodes, 
                                     in_shape, block_index, 
                                     use_split=use_split[block_index], 
                                     downsample=downsample[block_index])
 
-        for _ in range(num_InvAutoFC):
-            nodes.append(Ff.Node(nodes[-1].out0, Fm.ActNorm, 
-                                {}, name=f'ActNorm_final'))
-            nodes.append(Ff.Node(nodes[-1].out0, Fm.InvAutoFC, 
-                                {}, name='InvAutoFC'))
+            for _ in range(num_InvAutoFC):
+                nodes.append(Ff.Node(nodes[-1].out0, Fm.ActNorm, 
+                                    {}, name=f'ActNorm_final'))
+                nodes.append(Ff.Node(nodes[-1].out0, Fm.InvAutoFC, 
+                                    {}, name='InvAutoFC'))
 
-            nodes.append(Ff.OutputNode(nodes[-1].out0, name='output'))
-            # print([i.name for i in nodes])
+                nodes.append(Ff.OutputNode(nodes[-1].out0, name='output'))
+                # print([i.name for i in nodes])
+        else:
+            for _ in range(num_InvAutoFC):
+                nodes.append(Ff.Node(nodes[-1].out0, Fm.ActNorm, 
+                                    {}, name=f'ActNorm_final'))
+                nodes.append(Ff.Node(nodes[-1].out0, Fm.InvAutoFC, 
+                                    {}, name='InvAutoFC'))
+            
 
         super().__init__(nodes, verbose=verbose)
         self.invertible_net = Ff.ReversibleGraphNet()
 
 
-def Flow_Block(nodes, ConditionNode, block_index, in_shape, FlowBlocks_architecture, mid_channels,      num_ConvAttnBlock, num_components, drop_prob, use_self_attn=0):
+def Flow_Block(nodes, ConditionNode, block_index, in_shape, FlowBlocks_architecture, mid_channels, num_ConvAttnBlock, num_components, drop_prob, use_self_attn):
         num_channelwise, num_checkerboard = FlowBlocks_architecture
         
         for i in range(num_channelwise):

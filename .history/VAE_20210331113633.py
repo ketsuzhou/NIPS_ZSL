@@ -129,7 +129,7 @@ class AutoEncoder(nn.Module):
         in_chan_stoch_enc = self.in_chan_stoch_enc
         half_in_chan_stoch_enc = in_chan_stoch_enc / 2
         self.combiner_enc = EncCombinerCell(
-            half_in_chan_stoch_enc,
+            half_in_chan_stoch_enc *2,
             half_in_chan_stoch_enc,
             cell_type='combiner_enc')
         self.down1 = Cell(

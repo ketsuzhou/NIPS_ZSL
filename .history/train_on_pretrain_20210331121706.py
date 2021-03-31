@@ -12,6 +12,7 @@ import torch.optim.lr_scheduler as sched
 import torch.backends.cudnn as cudnn
 import torch.utils.data as data
 import torchvision
+import torchvision.models as models
 import torchvision.transforms as transforms
 from torch.utils.data import DataLoader
 import util
@@ -274,15 +275,8 @@ def main(args):
     torch.cuda.manual_seed(args.seed)
     torch.cuda.manual_seed_all(args.seed)
 
-    logging = utils.Logger(args.global_rank, args.save)
-    writer = utils.Writer(args.global_rank, args.save)
-
-    arch_instance = utils.get_arch_cells(args.arch_instance)
-    
-    model = AutoEncoder(args, writer, arch_instance)
-
     # Get data loaders.
-    dm = Data_Module(args)
+    dm = data_model(args)
     train_dataloader = dm.train_dataloader
     val_dataloader = dm.val_dataloader
     test_dataloader = dm.test_dataloader
@@ -291,23 +285,31 @@ def main(args):
     warmup_iters = len(train_dataloader) * args.warmup_epochs
     swa_start = len(train_dataloader) * (args.epochs - 1)
 
-    weight_path = 'https://pl-bolts-weights.s3.us-east-2.amazonaws.com/cpc/cpcv2_weights/checkpoints/epoch%3D526.ckpt'
-    cpc_v2 = CPCV2.load_from_checkpoint(weight_path, strict=False)
-    cpc_v2.freeze()
-    # finetuner
-    finetuner = SSLFineTuner(cpc_v2,
-                             in_features=cpc_v2.z_dim,
-                             num_classes=cpc_v2.num_classes)
-    from pl_bolts.models.autoencoders import VAE
+    if backend == 'resnet101':
+        resnet101 = models.__dict__['resnet101'](pretrained = True)
+        
+    else:
+        weight_path = 'https://pl-bolts-weights.s3.us-east-2.amazonaws.com/cpc/cpcv2_weights/checkpoints/epoch%3D526.ckpt'
+        cpc_v2 = CPCV2.load_from_checkpoint(weight_path, strict=False)
+        cpc_v2.freeze()
+        # finetuner
+        finetuner = SSLFineTuner(cpc_v2,
+                                in_features=cpc_v2.z_dim,
+                                num_classes=cpc_v2.num_classes)
+        from pl_bolts.models.autoencoders import VAE
+        # train
+        trainer = pl.Trainer(num_processes=2)
+        trainer.fit(finetuner, dm)
+        # test
+        trainer.test(datamodule=dm)
+        generative_classifier = Generative_Classifier(args)
+        
+    logging = utils.Logger(args.global_rank, args.save)
+    writer = utils.Writer(args.global_rank, args.save)
 
-    # train
-    trainer = pl.Trainer(num_processes=2)
-    trainer.fit(finetuner, dm)
-
-    # test
-    trainer.test(datamodule=dm)
-
-    generative_classifier = Generative_Classifier(args)
+    arch_instance = utils.get_arch_cells(args.arch_instance)
+    
+    model = AutoEncoder(args, writer, arch_instance)
 
 
 if __name__ == '__main__':
