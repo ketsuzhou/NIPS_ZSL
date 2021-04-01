@@ -1,6 +1,6 @@
 ckpt_name: "ResNet101_AwA2_SS_C"
 
-dataset: "CUB"
+# dataset: "AwA2"
 split: "standard_split"
 
 generalized: True

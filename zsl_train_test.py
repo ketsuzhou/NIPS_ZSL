@@ -29,8 +29,8 @@ import pytorch_lightning as pl
 import utils
 from torch.multiprocessing import Process
 import torch.distributed as dist
-from VAE import AutoEncoder
-from zsl_train_test import train_test
+from VAE import Im_AutoEncoder, Attr_AutoEncoder
+
 from adamax import Adamax
 from torch.cuda.amp import autocast, GradScaler
 
@@ -71,7 +71,7 @@ def train_test(args):
     writer = utils.Writer(args.global_rank, args.save)
 
     arch_instance = utils.get_arch_cells(args.arch_instance)
-    model = AutoEncoder(args, writer, arch_instance).cuda()
+    model = Im_AutoEncoder(args, writer, arch_instance).cuda()
 
     logging.info('args = %s', args)
     logging.info('param size = %fM ', utils.count_parameters_in_M(model))
@@ -111,7 +111,7 @@ def train_test(args):
         # update lrs.
         if args.distributed:
             train_dataloader.sampler.set_epoch(global_step + args.seed)
-            valid_queue.sampler.set_epoch(0)
+            val_dataloader.sampler.set_epoch(0)
 
         if epoch > args.warmup_epochs:
             cnn_scheduler.step()
@@ -138,7 +138,7 @@ def train_test(args):
                     output_tiled = utils.tile_image(output_img, n)
                     writer.add_image('generated_%0.1f' % t, output_tiled, global_step)
 
-            valid_neg_log_p, valid_nelbo = test(valid_queue, modelbackbone, model, num_samples=10, args=args, logging=logging)
+            valid_neg_log_p, valid_nelbo = test(val_dataloader, backbone, model, num_samples=10, args=args, logging=logging)
             logging.info('valid_nelbo %f', valid_nelbo)
             logging.info('valid neg log p %f', valid_neg_log_p)
             logging.info('valid bpd elbo %f', valid_nelbo * bpd_coeff)
@@ -158,7 +158,7 @@ def train_test(args):
                             'grad_scalar': grad_scalar.state_dict()}, checkpoint_file)
 
     # Final validation
-    valid_neg_log_p, valid_nelbo = test(valid_queue, model, num_samples=1000, args=args, logging=logging)
+    valid_neg_log_p, valid_nelbo = test(val_dataloader, model, num_samples=1000, args=args, logging=logging)
     logging.info('final valid nelbo %f', valid_nelbo)
     logging.info('final valid neg log p %f', valid_neg_log_p)
     writer.add_scalar('val/neg_log_p', valid_neg_log_p, epoch + 1)
@@ -168,7 +168,7 @@ def train_test(args):
     writer.close()
 
 
-def train(train_dataloader, model, cnn_optimizer, grad_scalar, global_step, warmup_iters, writer, logging):
+def train(args, train_dataloader, model, cnn_optimizer, grad_scalar, global_step, warmup_iters, writer, logging):
     alpha_i = utils.kl_balancer_coeff(num_scales=model.num_latent_scales,
                                       groups_per_scale=model.groups_per_scale, fun='square')
     nelbo = utils.AvgrageMeter()
@@ -176,9 +176,6 @@ def train(train_dataloader, model, cnn_optimizer, grad_scalar, global_step, warm
     for step, x in enumerate(train_dataloader):
         x = x[0] if len(x) > 1 else x
         x = x.cuda()
-
-        # change bit length
-        x = utils.pre_process(x, args.num_x_bits)
 
         # warm-up lr
         if global_step < warmup_iters:
@@ -265,13 +262,13 @@ def train(train_dataloader, model, cnn_optimizer, grad_scalar, global_step, warm
     return nelbo.avg, global_step
 
 
-def test(valid_queue, model, num_samples, args, logging):
+def test(val_dataloader, model, num_samples, args, logging):
     if args.distributed:
         dist.barrier()
     nelbo_avg = utils.AvgrageMeter()
     neg_log_p_avg = utils.AvgrageMeter()
     model.eval()
-    for step, x in enumerate(valid_queue):
+    for step, x in enumerate(val_dataloader):
         x = x[0] if len(x) > 1 else x
         x = x.cuda()
 

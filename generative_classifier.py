@@ -7,9 +7,9 @@ import numpy as np
 
 from models.flow.invertible_net import *
 
-class generative_classifier(nn.Module):
+class nf_classifier(nn.Module):
     def __init__(self, condition_encoder, inn_prior_sampler, attribute):
-        super(generative_classifier, self).__init__()
+        super(nf_classifier, self).__init__()
         # self.args = args
         # self.invertible_nets = nn.ModuleList()
         attribute_transductive = 1

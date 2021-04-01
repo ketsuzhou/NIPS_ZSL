@@ -35,6 +35,7 @@ import torch.distributed as dist
 from VAE import AutoEncoder
 from zsl_train_test import train_test
 
+
 def arg_parse():
     parser = argparse.ArgumentParser(description='Flow++ on CIFAR-10')
 
@@ -45,7 +46,7 @@ def arg_parse():
 
     # data loader params
     parser.add_argument('--data_root',
-                        default='../data',
+                        default='../../../media/data/',
                         type=str,
                         metavar='DIRECTORY',
                         help='path to data directory')
@@ -284,9 +285,10 @@ if __name__ == '__main__':
             print('Node rank %d, local proc %d, global proc %d' %
                   (args.node_rank, rank, global_rank))
             p = Process(target=init_processes,
-                        args=(global_rank, global_size, main, args))
+                        args=(global_rank, global_size, train_test, args))
             p.start()
             processes.append(p)
+
 
         for p in processes:
             p.join()
