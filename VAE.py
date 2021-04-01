@@ -13,6 +13,7 @@ from generative_classifier import generative_classifier
 from models.flow.invertible_net import invertible_net
 import utils
 
+
 class Cell(nn.Module):
     def __init__(self, Cin, Cout, cell_type, arch, use_se):
         super(Cell, self).__init__()
@@ -46,9 +47,9 @@ class Cell(nn.Module):
         return skip + 0.1 * s
 
 
-class AutoEncoder(nn.Module):
+class Im_AutoEncoder(nn.Module):
     def __init__(self, args, writer, arch_instance):
-        super(AutoEncoder, self).__init__()
+        super(Im_AutoEncoder, self).__init__()
         # self.writer = writer
         self.arch_instance = arch_instance
         self.in_shape = args.in_shape
@@ -56,7 +57,7 @@ class AutoEncoder(nn.Module):
         # self.res_dist = args.res_dist        # todo
 
         # AutoEncoder setting
-        self.num_latent_scales = 2         # number of spatial scales that latent layers will reside
+        self.num_latent_scales = 2  # number of spatial scales that latent layers will reside
         self.num_groups_per_scale = 1  # number of groups of latent vars. per scale default 64
         self.residul_latent_dim = 256  # dimension of latent vars. per group
         self.groups_per_scale = 1
@@ -66,8 +67,9 @@ class AutoEncoder(nn.Module):
         self.in_chan_deter_enc = args.in_chan_deter_enc
         mult = 1
         self.num_cell_per_cond_enc = args.num_cell_per_cond_enc
-        self.deterministic_encoder, mult = self.init_deterministic_encoder(mult)
-        
+        self.deterministic_encoder, mult = self.init_deterministic_encoder(
+            mult)
+
         self.in_chan_stoch_enc = mult * self.in_chan_deter_enc
         self.stochastic_encoder = self.init_stochastic_encoder()
 
@@ -87,7 +89,8 @@ class AutoEncoder(nn.Module):
         # init decoder
         self.num_deterministic_decoder = self.num_deterministic_encoder
         self.stochastic_decoder, mult = self.init_stochastic_decoder(mult)
-        self.deterministic_decoder, mult = self.init_deterministic_decoder(mult)
+        self.deterministic_decoder, mult = self.init_deterministic_decoder(
+            mult)
 
         self.image_conditional = self.init_image_conditional(mult)
 
@@ -124,53 +127,46 @@ class AutoEncoder(nn.Module):
             deterministic_encoder.append(cell)
         return deterministic_encoder, mult
 
-
     def init_stochastic_encoder(self):
         in_chan_stoch_enc = self.in_chan_stoch_enc
         half_in_chan_stoch_enc = in_chan_stoch_enc / 2
-        self.combiner_enc = EncCombinerCell(
-            half_in_chan_stoch_enc,
-            half_in_chan_stoch_enc,
-            cell_type='combiner_enc')
-        self.down1 = Cell(
-            in_chan_stoch_enc,
-            half_in_chan_stoch_enc,
-            cell_type='down_enc',
-            arch=self.arch_instance['down_enc'],
-            use_se=self.use_se)
-        self.enc = Cell(
-            half_in_chan_stoch_enc,
-            half_in_chan_stoch_enc,
-            cell_type='normal_enc',
-            arch=self.arch_instance['normal_enc'],
-            use_se=self.use_se)
-        self.down2 = Cell(
-            half_in_chan_stoch_enc,
-            half_in_chan_stoch_enc,
-            cell_type='down_enc',
-            arch=self.arch_instance['down_enc'],
-            use_se=self.use_se)
-
+        self.combiner_enc = EncCombinerCell(half_in_chan_stoch_enc,
+                                            half_in_chan_stoch_enc,
+                                            cell_type='combiner_enc')
+        self.down1 = Cell(in_chan_stoch_enc,
+                          half_in_chan_stoch_enc,
+                          cell_type='down_enc',
+                          arch=self.arch_instance['down_enc'],
+                          use_se=self.use_se)
+        self.enc = Cell(half_in_chan_stoch_enc,
+                        half_in_chan_stoch_enc,
+                        cell_type='normal_enc',
+                        arch=self.arch_instance['normal_enc'],
+                        use_se=self.use_se)
+        self.down2 = Cell(half_in_chan_stoch_enc,
+                          half_in_chan_stoch_enc,
+                          cell_type='down_enc',
+                          arch=self.arch_instance['down_enc'],
+                          use_se=self.use_se)
 
     def init_pri_pos_sampler(self, args):
         in_chan_stoch_enc = self.in_chan_stoch_enc
         half_in_chan_stoch_enc = in_chan_stoch_enc / 2
-        self.local_posterior = Conv2D(
-            in_chan_stoch_enc,
-            2 * self.residul_latent_dim + 2 * self.nf_dim_local, 
-            kernel_size=3, 
-            padding=1, 
-            bias=True)
+        self.local_posterior = Conv2D(in_chan_stoch_enc,
+                                      2 * self.residul_latent_dim +
+                                      2 * self.nf_dim_local,
+                                      kernel_size=3,
+                                      padding=1,
+                                      bias=True)
         # condition for local NF prior
         self.condition_encoder = nn.ModuleList(
             nn.Sequential(
                 nn.ELU(),
-                Conv2D(
-                    half_in_chan_stoch_enc,
-                    self.in_chan_condition,
-                    kernel_size=1,
-                    padding=0,
-                    bias=True)))
+                Conv2D(half_in_chan_stoch_enc,
+                       self.in_chan_condition,
+                       kernel_size=1,
+                       padding=0,
+                       bias=True)))
         self.local_nf_prior_z = invertible_net(
             use_self_attn=args.use_self_attn,
             use_split=args.use_split,
@@ -183,12 +179,11 @@ class AutoEncoder(nn.Module):
             num_ConvAttnBlock=args.num_ConvAttnBlock,
             num_components=args.num_components,
             drop_prob=args.drop_prob)
-        self.global_posterior = Conv2D(
-            in_chan_stoch_enc,
-            2 * self.nf_dim_nonlocal, 
-            kernel_size=3, 
-            padding=1, 
-            bias=True)
+        self.global_posterior = Conv2D(in_chan_stoch_enc,
+                                       2 * self.nf_dim_nonlocal,
+                                       kernel_size=3,
+                                       padding=1,
+                                       bias=True)
         self.global_nf_prior = invertible_net(
             use_self_attn=args.use_self_attn,
             use_split=args.use_split,
@@ -203,33 +198,27 @@ class AutoEncoder(nn.Module):
             drop_prob=args.drop_prob,
             num_InvAutoFC=1)
 
-
     def init_stochastic_decoder(self):
         half_in_chan_stoch_enc = self.in_chan_stoch_enc / 2
-        self.up1 = Cell(
-            half_in_chan_stoch_enc,
-            half_in_chan_stoch_enc,
-            cell_type='up_dec',
-            arch=self.arch_instance['up_dec'],
-            use_se=self.use_se)
-        self.dec = Cell(
-            half_in_chan_stoch_enc,
-            half_in_chan_stoch_enc,
-            cell_type='normal_dec',
-            arch=self.arch_instance['normal_dec'],
-            use_se=self.use_se)
-        self.up2 = Cell(
-            half_in_chan_stoch_enc,
-            half_in_chan_stoch_enc,
-            cell_type='up_dec',
-            arch=self.arch_instance['up_dec'],
-            use_se=self.use_se)
-        self.combiner_dec = DecCombinerCell(
-            2 * half_in_chan_stoch_enc,
-            half_in_chan_stoch_enc,
-            half_in_chan_stoch_enc,
-            cell_type='combiner_dec')
-
+        self.up1 = Cell(half_in_chan_stoch_enc,
+                        half_in_chan_stoch_enc,
+                        cell_type='up_dec',
+                        arch=self.arch_instance['up_dec'],
+                        use_se=self.use_se)
+        self.dec = Cell(half_in_chan_stoch_enc,
+                        half_in_chan_stoch_enc,
+                        cell_type='normal_dec',
+                        arch=self.arch_instance['normal_dec'],
+                        use_se=self.use_se)
+        self.up2 = Cell(half_in_chan_stoch_enc,
+                        half_in_chan_stoch_enc,
+                        cell_type='up_dec',
+                        arch=self.arch_instance['up_dec'],
+                        use_se=self.use_se)
+        self.combiner_dec = DecCombinerCell(2 * half_in_chan_stoch_enc,
+                                            half_in_chan_stoch_enc,
+                                            half_in_chan_stoch_enc,
+                                            cell_type='combiner_dec')
 
     def init_deterministic_decoder(self):
         deterministic_decoder = nn.ModuleList()
@@ -280,10 +269,10 @@ class AutoEncoder(nn.Module):
         # perform deterministic_decoder
         for cell in self.deterministic_decoder:
             s = cell(s)
-	    rec_loss = torch.sum(torch.abs(x - s), dim=(1, 2, 3)) / batch_size
-        
-        return rec_loss, z_loss1, z_loss2
 
+            rec_loss = torch.sum(torch.abs(x - s), dim=(1, 2, 3)) / batch_size
+
+        return rec_loss, z_loss1, z_loss2
 
     def sample(self, num_samples, t):
         scale_ind = 0
@@ -339,9 +328,13 @@ class AutoEncoder(nn.Module):
                 if i not in self.sr_u:
                     num_w, row, col = weights[i].shape
                     self.sr_u[i] = F.normalize(torch.ones(num_w, row).normal_(
-                        0, 1).cuda(), dim=1, eps=1e-3)
+                        0, 1).cuda(),
+                                               dim=1,
+                                               eps=1e-3)
                     self.sr_v[i] = F.normalize(torch.ones(num_w, col).normal_(
-                        0, 1).cuda(), dim=1, eps=1e-3)
+                        0, 1).cuda(),
+                                               dim=1,
+                                               eps=1e-3)
                     # increase the number of iterations for the first time
                     num_iter = 10 * self.num_power_iter
 
@@ -351,10 +344,14 @@ class AutoEncoder(nn.Module):
                     # This power iteration produces approximations of `u` and `v`.
                     self.sr_v[i] = F.normalize(
                         torch.matmul(self.sr_u[i].unsqueeze(1),
-                                     weights[i]).squeeze(1), dim=1, eps=1e-3)  # bx1xr * bxrxc --> bx1xc --> bxc
+                                     weights[i]).squeeze(1),
+                        dim=1,
+                        eps=1e-3)  # bx1xr * bxrxc --> bx1xc --> bxc
                     self.sr_u[i] = F.normalize(
                         torch.matmul(weights[i],
-                                     self.sr_v[i].unsqueeze(2)).squeeze(2), dim=1, eps=1e-3)  # bxrxc * bxcx1 --> bxrx1  --> bxr
+                                     self.sr_v[i].unsqueeze(2)).squeeze(2),
+                        dim=1,
+                        eps=1e-3)  # bxrxc * bxcx1 --> bxrx1  --> bxr
 
             sigma = torch.matmul(
                 self.sr_u[i].unsqueeze(1),
@@ -368,3 +365,40 @@ class AutoEncoder(nn.Module):
             if l.affine:
                 loss += torch.max(torch.abs(l.weight))
         return loss
+
+
+def weights_init(m):
+    classname = m.__class__.__name__
+    if classname.find('Linear') != -1:
+        m.bias.data.fill_(0)
+        nn.init.xavier_uniform_(m.weight, gain=0.5)
+
+
+class Attr_AutoEncoder(nn.Module):
+    def __init__(self, dim_attribute, dim_interme_layer, dim_latent_layer):
+        super(Attr_AutoEncoder, self).__init__()
+        self.dim_latent_layer = dim_latent_layer
+        self.encoder = nn.Sequential(
+            nn.Linear(dim_attribute, dim_interme_layer),
+            nn.ReLU(),
+            nn.Linear(dim_interme_layer, dim_latent_layer),
+            nn.ReLU(),
+            nn.Linear(dim_latent_layer, dim_latent_layer * 2),
+        )
+        self.apply(weights_init)
+        self.decoder = nn.Sequential(
+            nn.Linear(dim_latent_layer, dim_interme_layer), nn.ReLU(),
+            nn.Linear(dim_interme_layer, dim_attribute))
+
+    def forward(self, x):
+        mu, log_sigma = torch.chunk(self.encoder(x), 2, dim=1)
+        dist = Normal(mu, log_sigma)
+        kl_loss = dist.kl(
+            Normal(
+                torch.zeros(self.dim_latent_layer).cuda(),
+                torch.ones(self.dim_latent_layer).cuda()))
+        reconstructed = self.decoder(dist.sample())
+        recon_loss = torch.abs(reconstructed, x)
+
+        return recon_loss, kl_loss
+
