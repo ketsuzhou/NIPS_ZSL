@@ -23,7 +23,7 @@ from models.flow.invertible_net import *
 from tqdm import tqdm
 import yaml
 from configs.default import cfg, update_datasets
-from generative_classifier import generative_classifier
+# from generative_classifier import generative_classifier
 from data_model import data_model
 from data_factory.dataloader import IMAGE_LOADOR
 from pl_bolts.models.self_supervised import CPCV2, SSLFineTuner
@@ -288,7 +288,6 @@ if __name__ == '__main__':
                         args=(global_rank, global_size, train_test, args))
             p.start()
             processes.append(p)
-
 
         for p in processes:
             p.join()

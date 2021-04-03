@@ -9,7 +9,7 @@ from neural_ar_operations import ARConv2d
 from utils import get_stride_for_cell_type, get_input_size, groups_per_scale, get_arch_cells
 from distributions import Normal, DiscMixLogistic
 from inplaced_sync_batchnorm import SyncBatchNormSwish
-from generative_classifier import generative_classifier
+from inn_interv_classi import inn_classifier, inn_intervention
 from models.flow.invertible_net import invertible_net
 import utils
 
@@ -46,10 +46,25 @@ class Cell(nn.Module):
         s = self.se(s) if self.use_se else s
         return skip + 0.1 * s
 
+def cluster_distances(self, z, y=None):
 
-class Im_AutoEncoder(nn.Module):
+    if y is not None:
+        mu = torch.mm(z.t().detach(), y.round())
+        mu = mu / torch.sum(y, dim=0, keepdim=True)
+        mu = mu.t().view(1, self.n_classes, -1)
+        mu = 0.005 * mu + 0.995 * self.mu.data
+        self.mu.data = mu.data
+
+    z_i_z_i = torch.sum(z**2, dim=1, keepdim=True)   # batchsize x n_classes
+    mu_j_mu_j = torch.sum(self.mu**2, dim=2)         # 1 x n_classes
+    z_i_mu_j = torch.mm(z, self.mu.squeeze().t())    # batchsize x n_classes
+
+    return -2 * z_i_mu_j + z_i_z_i + mu_j_mu_j
+        
+
+class inn_vae(nn.Module):
     def __init__(self, args, writer, arch_instance):
-        super(Im_AutoEncoder, self).__init__()
+        super(inn_vae, self).__init__()
         # self.writer = writer
         self.arch_instance = arch_instance
         self.in_shape = args.in_shape
@@ -66,14 +81,14 @@ class Im_AutoEncoder(nn.Module):
 
         # decoder parameters
         # number of cell for each conditional in decoder
-        self.nf_dim_per_scale = 32
+        self.inn_dim_per_scale = 32
 
         # init prior and posterior
         self.init_pri_pos(args)
 
-        self.generative_classifier = generative_classifier(
-            self.nf_prior_z, args.attribute)
-
+        # self.inn_prior_z = inn_classifier(
+        #     self.inn_prior_z, args.attribute)
+        self.inn_classifier = inn_classifier()
         # init decoder
         self.num_decoder = self.num_encoder
         self.decoder, mult = self.init_decoder(mult)
@@ -116,31 +131,31 @@ class Im_AutoEncoder(nn.Module):
         # half_in_chan_stoch_enc = in_chan_stoch_enc / 2
         self.posterior = Conv2D(in_chan_enc,
                                       2 * self.residul_latent_dim +
-                                      2 * self.nf_dim_local,
+                                      2 * self.inn_dim_local,
                                       kernel_size=3,
                                       padding=1,
                                       bias=True)
 
-        self.nf_prior_z = invertible_net(
+        self.inn_prior_z = invertible_net(
             use_self_attn=args.use_self_attn,
             use_split=args.use_split,
             downsample=args.downsample,
             verbose=False,
             FlowBlocks_architecture=args.FlowBlocks_architecture,
-            in_shape=self.nf_in_shape,
+            in_shape=self.inn_in_shape,
             in_shape_condition_node=in_shape_condition_node,
             mid_channels=args.num_channels,
             num_ConvAttnBlock=args.num_ConvAttnBlock,
             num_components=args.num_components,
             drop_prob=args.drop_prob)
 
-        self.nf_prior_r = invertible_net(
+        self.inn_prior_r = invertible_net(
             use_self_attn=args.use_self_attn,
             use_split=args.use_split,
             downsample=args.downsample,
             verbose=False,
             FlowBlocks_architecture=args.FlowBlocks_architecture,
-            in_shape=self.nf_in_shape,
+            in_shape=self.inn_in_shape,
             in_shape_condition_node=None,
             mid_channels=args.num_channels,
             num_ConvAttnBlock=args.num_ConvAttnBlock,
@@ -148,14 +163,14 @@ class Im_AutoEncoder(nn.Module):
             drop_prob=args.drop_prob,
             num_InvAutoFC=1)
 
-    def init_nf_intervention(self, args):
+    def init_inn_intervention(self, args):
         inn = invertible_net(
             use_self_attn=args.use_self_attn,
             use_split=args.use_split,
             downsample=args.downsample,
             verbose=False,
             FlowBlocks_architecture=args.FlowBlocks_architecture,
-            in_shape=self.nf_in_shape,
+            in_shape=self.inn_in_shape,
             in_shape_condition_node=None,
             mid_channels=args.num_channels,
             num_ConvAttnBlock=args.num_ConvAttnBlock,
@@ -163,7 +178,7 @@ class Im_AutoEncoder(nn.Module):
             drop_prob=args.drop_prob,
             num_InvAutoFC=1)
 
-        self.nf_intervention =
+        self.inn_intervention = inn_intervention(inn )
 
     def init_decoder(self):
         decoder = nn.ModuleList()
@@ -179,36 +194,84 @@ class Im_AutoEncoder(nn.Module):
         decoder.append(cell)
         return decoder, mult
 
-    def forward(self, x, one_hot_attributes, encoded_attributes):
-        batch_size = x.size(0)
-        # perform deterministic_encoder
-        for cell in self.deterministic_encoder:
-            s = cell(s)
+    def entropy_estimator(self, log_q_latent_condi_x, num_train):
+        q_latent_condi_x = torch.exp(log_q_latent_condi_x)
+        sum_q_over_remaining = torch.sum(q_latent_condi_x, dim=0, keepdim=True)
+        batch_size = log_q_latent_condi_x.size(0)
 
-        mu1, log_var1, mu2, log_var2 = torch.chunk(s, 4, dim=1)
+        for i in range(batch_size):
+            sum_q_over_remaining[i, :, :, :] -= q_latent_condi_x[i, :, :, :]
+         
+        q_latent = (1 / num_train )* q_latent_condi_x + \
+            ((num_train - 1) / (num_train * (batch_size - 1))) * sum_q_over_remaining
+        # upper bound of entropy for approximation
+        # entropy_q_latent = torch.mean(torch.reshape(torch.log(q_latent), [batch_size, -1]) , dim=0)  
+        # calculating mean over batch as above resulting entropy_q_latent
+        log_q_latent = torch.reshape(torch.log(q_latent), [batch_size, -1]) 
+        return log_q_latent
 
-        z_dis = Normal(mu1, log_var1)
-        z_sample = z_dis.sample # [batch, 128, 7, 7]
-        z_loss = self.nf_prior_z(z_sample, encoded_attributes)
+    def intervention(self ):
+        z_sample = self.z_dis.sample # [batch, 128, 7, 7]
+        intervention_loss = self.inn_intervention(z_sample)
+        return intervention_loss
 
-        r_dis = Normal(mu2, log_var2)
-        r_sample = r_dis.sample
-        r_loss = self.nf_prior_r(r_sample, encoded_attributes)
+    def forward(self, inputs, encoded_attributes, num_train):
+        [batch_size, channels, height, weight] = inputs.size()
+        # perform encoder
+        for encoder in self.encoder:
+            inputs = encoder(inputs)
 
-        observed 
-        intervented 
-        intervented = self.nf_intervention(z_sample, one_hot_attributes)
+        mu1, log_var1, mu2, log_var2 = torch.chunk(inputs, 4, dim=1)
 
-        # concat as short-cut
-        s = torch.cat(z_sample, r_sample, dim=1)
+        self.z_dis = Normal(mu1, log_var1)
+        z_sample = self.z_dis.sample # [batch, 128, 7, 7]
+        f_z = self.inn_prior_z(z_sample)
+        log_jacobian_z = self.inn_prior_z.log_jacobian(run_forward=False)
 
-        # perform deterministic_decoder
-        for cell in self.deterministic_decoder:
-            s = cell(s)
+        log_p_f_z, bayes_loss = self.inn_classifier(f_z, y) # [batch, -1]
 
-            rec_loss = torch.sum(torch.abs(x - s), dim=(1, 2, 3)) / batch_size
+        log_q_z = self.z_dis.log_p(z_sample)
 
-        return rec_loss, z_loss1, z_loss2
+        regul_z = log_p_f_z + log_jacobian_z - \
+            torch.log(self.entropy_estimator(log_q_z, num_train))
+
+        # dis_z_a = self.inn_classifier.cluster_distances(f_z, encoded_attributes)
+
+        # deter_z = self.inn_prior_z.log_jacobian_numerical #todo
+        self.r_dis = Normal(mu2, log_var2)
+        r_sample = self.r_dis.sample
+        f_r = self.inn_prior_r(r_sample)
+        normal = Normal(torch.zeros_like(f_r), torch.ones_like(f_r))
+        log_jacobian_r = self.inn_prior_r.log_jacobian(run_forward=False)
+        
+        log_p_f_r = normal.log_p(f_r)
+        log_q_r = self.r_dis.log_p(r_sample)
+
+        log_q_w = torch.cat(log_q_z, log_q_r, dim=1)
+
+        w_sample = torch.cat(z_sample, r_sample)
+
+        decodered = w_sample
+        # perform decoder
+        for decoder in self.decoder:
+            decodered = decoder(decodered)
+        
+        # todo testing L_2 distance
+        recon_loss = torch.cosine_similarity(
+            torch.reshape(inputs, [batch_size, -1]), 
+            torch.reshape(decodered, [batch_size, -1]))
+        # channelwise_recon_loss = torch.cosine_similarity(
+        #     torch.reshape(inputs, [batch_size, channels, -1]), 
+        #     torch.reshape(decodered, [batch_size, channels, -1]), dim=1)
+
+        regul_r = log_p_f_r + log_jacobian_r - torch.log(
+            self.entropy_estimator(log_q_r, num_train))
+        
+        # 
+        mutual_info_wx = torch.reshape(log_q_w, [batch_size, -1]) \
+             - torch.log(self.entropy_estimator(log_q_w, num_train))
+
+        return recon_loss, regul_z, regul_r, bayes_loss, mutual_info_wx
 
     def sample(self, num_samples, t):
         scale_ind = 0

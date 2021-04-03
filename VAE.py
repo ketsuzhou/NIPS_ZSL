@@ -9,7 +9,7 @@ from neural_ar_operations import ARConv2d
 from utils import get_stride_for_cell_type, get_input_size, groups_per_scale, get_arch_cells
 from distributions import Normal, DiscMixLogistic
 from inplaced_sync_batchnorm import SyncBatchNormSwish
-from generative_classifier import generative_classifier
+from inn_interv_classi import inn_classifier
 from models.flow.invertible_net import invertible_net
 import utils
 
@@ -47,9 +47,9 @@ class Cell(nn.Module):
         return skip + 0.1 * s
 
 
-class Im_AutoEncoder(nn.Module):
+class AutoEncoder(nn.Module):
     def __init__(self, args, writer, arch_instance):
-        super(Im_AutoEncoder, self).__init__()
+        super(AutoEncoder, self).__init__()
         # self.writer = writer
         self.arch_instance = arch_instance
         self.in_shape = args.in_shape
@@ -401,4 +401,3 @@ class Attr_AutoEncoder(nn.Module):
         recon_loss = torch.abs(reconstructed, x)
 
         return recon_loss, kl_loss
-

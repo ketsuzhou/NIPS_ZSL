@@ -79,7 +79,7 @@ class invertible_net(Ff.ReversibleGraphNet):
         self.invertible_net = Ff.ReversibleGraphNet()
 
 
-def Flow_Block(nodes, ConditionNode, block_index, in_shape, FlowBlocks_architecture, mid_channels,      num_ConvAttnBlock, num_components, drop_prob, use_self_attn=0):
+def Flow_Block(nodes, ConditionNode, block_index, in_shape, FlowBlocks_architecture, mid_channels,   num_ConvAttnBlock, num_components, drop_prob, use_self_attn=0):
         num_channelwise, num_checkerboard = FlowBlocks_architecture
         
         for i in range(num_channelwise):

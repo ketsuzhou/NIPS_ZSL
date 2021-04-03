@@ -7,12 +7,10 @@ import numpy as np
 
 from models.flow.invertible_net import *
 
-class nf_classifier(nn.Module):
+class inn_classifier(nn.Module):
     def __init__(self, condition_encoder, inn_prior_sampler, attribute):
-        super(nf_classifier, self).__init__()
-        # self.args = args
-        # self.invertible_nets = nn.ModuleList()
-        attribute_transductive = 1
+        super(inn_classifier, self).__init__()
+        self.batch_size = batch_size
         self.dim_attribute = len(attribute)
         self.num_inn = len(inn_prior_sampler)
         # self.num_inn = num_latent_scales * num_groups_per_scale
@@ -21,13 +19,12 @@ class nf_classifier(nn.Module):
 
         self.num_classes = int(attribute.shape[0])
         self.num_dim = int(attribute.size(1))
+
         mu_populate_dims = self.num_dim
-        self.mu = nn.Parameter(torch.zeros(1, self.num_classes, mu_populate_dims))
+        self.mu = enc_attr
         init_latent_scale = 5.0
         init_scale = init_latent_scale / np.sqrt(2 * mu_populate_dims // self.num_classes)
 
-        for k in range(mu_populate_dims // self.num_classes):
-            self.mu.data[0, :, self.num_classes * k : self.num_classes * (k+1)] = init_scale * torch.eye(self.num_classes)
         
         self.phi = nn.Parameter(torch.zeros(self.num_classes))
 
@@ -64,14 +61,7 @@ class nf_classifier(nn.Module):
         else:
             raise ValueError(f'what is this optimizer, {optimizer}?')
 
-    def cluster_distances(self, z, y=None):
-
-        if y is not None:
-            mu = torch.mm(z.t().detach(), y.round())
-            mu = mu / torch.sum(y, dim=0, keepdim=True)
-            mu = mu.t().view(1, self.n_classes, -1)
-            mu = 0.005 * mu + 0.995 * self.mu.data
-            self.mu.data = mu.data
+    def cluster_distances(self, z, y):
 
         z_i_z_i = torch.sum(z**2, dim=1, keepdim=True)   # batchsize x n_classes
         mu_j_mu_j = torch.sum(self.mu**2, dim=2)         # 1 x n_classes
@@ -83,58 +73,27 @@ class nf_classifier(nn.Module):
 
         mu_i_mu_j = self.mu.squeeze().mm(self.mu.squeeze().t())
         mu_i_mu_i = torch.sum(self.mu.squeeze()**2, 1, keepdim=True).expand(self.n_classes, self.n_classes)
-
-        dist =  mu_i_mu_i + mu_i_mu_i.t() - 2 * mu_i_mu_j
+        dist = mu_i_mu_i + mu_i_mu_i.t() - 2 * mu_i_mu_j
         return torch.masked_select(dist, (1 - torch.eye(self.n_classes).cuda()).bool()).clamp(min=0.)
 
-    def forward(self, x, y=None, loss_mean=True):
-
-        if self.feed_forward:
-            return self.losses_feed_forward(x, y, loss_mean)
-
-        z = self.invertible_net(x)
-        jac = self.invertible_net.log_jacobian(run_forward=False)
-
+    def forward(self, f_z, y):
         log_wy = torch.log_softmax(self.phi, dim=0).view(1, -1)
-        zz = self.cluster_distances(z, y)
-        losses = {
-            'L_x_tr': (- torch.logsumexp(- 0.5 * zz + log_wy, dim=1) - jac ) / self.ndim_tot,  'logits_tr': - 0.5 * zz}
+        zz = self.cluster_distances(f_z)
+
+        log_p_f_z = torch.logsumexp(- 0.5 * zz + log_wy, dim=1)
+
         # detach log_wy to block gradient
         log_wy = log_wy.detach()
-        if y is not None:
-            # losses['L_cNLL_tr'] = (0.5 * torch.sum(zz * y.round(), dim=1) - jac) / self.ndim_tot
-            losses['L_y_tr'] = torch.sum(
-                (torch.log_softmax(- 0.5 * zz + log_wy, dim=1) - log_wy) * y, dim=1)
-            
-            losses['acc_tr'] = torch.mean(
-                (torch.max(y, dim=1)[1]  
-                == torch.max(losses['logits_tr'].detach(), dim=1)[1]).float())
+        bayes_loss = torch.sum(
+            (torch.log_softmax(- 0.5 * zz + log_wy, dim=1) - log_wy) * y, dim=1)
 
-        if loss_mean:
-            for k, v in losses.items():
-                losses[k] = torch.mean(v)
+        # todo
+        logits_tr = - 0.5 * zz
+        acc_tr = torch.mean(
+            (torch.max(y, dim=1)[1]  
+            == torch.max(logits_tr.detach(), dim=1)[1]).float())
 
-        return losses
-
-    def losses_feed_forward(self, x, y=None, loss_mean=True):
-        logits = self.invertible_net(x)
-
-        losses = {'logits_tr': logits,
-                  'L_x_tr': torch.zeros_like(logits[:,0])}
-
-        if y is not None:
-            ly =  torch.sum(torch.log_softmax(logits, dim=1) * y, dim=1)
-            acc = torch.mean((torch.max(y, dim=1)[1]
-                           == torch.max(logits.detach(), dim=1)[1]).float())
-            losses['L_y_tr'] = ly
-            losses['acc_tr'] = acc
-            losses['L_cNLL_tr'] = torch.zeros_like(ly)
-
-        if loss_mean:
-            for k,v in losses.items():
-                losses[k] = torch.mean(v)
-
-        return losses
+        return log_p_f_z, bayes_loss
 
     def validate(self, x, y, eval_mode=True):
         is_train = self.invertible_net.training
@@ -200,3 +159,13 @@ class nf_classifier(nn.Module):
             pass
         except:
             print('loading the optimizer went wrong, skipping')
+
+
+class inn_intervention(nn.Module):
+    def __init__(self, inn):
+        super(inn_intervention, self).__init__()
+        self.inn = inn
+
+    def forward(self, sample, sourse_attributes, target_attributes):
+        intervention = torch.abs(target_attributes - sourse_attributes) 
+        intervented_sample = self.inn(sample, c=intervention)

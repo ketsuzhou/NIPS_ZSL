@@ -97,13 +97,14 @@ class data_model(LightningDataModule):
         self.test_transforms = TestTransforms
         self.all_data_path, self.labels, self.class_map = image_load(
             args.class_file, args.image_label)
-        self.train_data_path, self.test_data_path, self.label_map, self.train_attr, self.test_attr = split_byclass(
-            args, self.all_data_path, self.labels,
-            np.loadtxt(args.attributes_file), self.class_map)
+        self.train_data_path, self.test_data_path, \
+            self.label_map, self.train_attr, self.test_attr = split_byclass(
+                args, self.all_data_path, self.labels,
+                np.loadtxt(args.attributes_file), self.class_map)
             
         self.num_classes = self.train_attr.size(0)
 
-    def train_dataloader(self):
+    def conventional_train_dataloader(self):
         params = {
             'batch_size': self.batch_size,
             'num_workers': self.num_workers,
@@ -121,7 +122,7 @@ class data_model(LightningDataModule):
 
         return train_dataloader
 
-    def val_dataloader(self):
+    def conventional_test_dataloader(self):
         params = {
             'batch_size': self.batch_size,
             'num_workers': self.num_workers,
@@ -138,8 +139,27 @@ class data_model(LightningDataModule):
                     is_train=False), **params)
 
         return val_dataloader
+    
 
-    def test_dataloader(self):
+    def generalized_train_dataloader(self):
+        params = {
+            'batch_size': self.batch_size,
+            'num_workers': self.num_workers,
+            'pin_memory': True,
+            'shuffle': True,
+            'sampler': None
+        }
+        train_dataloader = data.DataLoader(
+            DataSet(self.image_dir,
+                    self.num_classes,
+                    self.train_data_path,
+                    self.labels,
+                    self.train_transforms,
+                    is_train=True), **params)
+
+        return train_dataloader
+
+    def generalized_test_dataloader(self):
         params = {
             'batch_size': self.batch_size,
             'num_workers': self.num_workers,
@@ -147,7 +167,7 @@ class data_model(LightningDataModule):
             'sampler': None,
             'shuffle': False
         }
-        test_dataloader = data.DataLoader(
+        val_dataloader = data.DataLoader(
             DataSet(self.image_dir,
                     self.num_classes,
                     self.test__data_path,
@@ -155,4 +175,4 @@ class data_model(LightningDataModule):
                     self.test_transforms,
                     is_train=False), **params)
 
-        return test_dataloader
+        return val_dataloader

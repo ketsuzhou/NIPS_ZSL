@@ -40,7 +40,7 @@ class Normal:
 
     def log_p(self, samples):
         normalized_samples = (samples - self.mu) / self.sigma
-        log_p = - 0.5 * normalized_samples * normalized_samples - 0.5 * np.log(2 * np.pi) - torch.log(self.sigma)
+        log_p = - 0.5 * normalized_samples * normalized_samples - 0.5 * torch.log(2 * torch.pi) - torch.log(self.sigma)
         return log_p
 
     def kl(self, normal_dist):
