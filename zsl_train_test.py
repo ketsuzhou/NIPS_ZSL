@@ -1,3 +1,6 @@
+import matplotlib.pyplot as plt
+from bagnets.utils import plot_heatmap, generate_heatmap_pytorch
+import bagnets.pytorchnet
 import argparse
 import numpy as np
 import os
@@ -19,8 +22,8 @@ from models.flow.invertible_net import *
 from tqdm import tqdm
 import yaml
 from configs.default import cfg, update_datasets
-from inn_interv_classi import inn_classifier
-from data_model import data_model
+from inn_model import inn_classifier
+from data_module import data_module
 from data_factory.dataloader import IMAGE_LOADOR
 from pl_bolts.models.self_supervised import CPCV2, SSLFineTuner
 from pytorch_lightning import Trainer
@@ -31,6 +34,10 @@ import torch.distributed as dist
 from inn_vae import inn_vae
 from adamax import Adamax
 from torch.cuda.amp import autocast, GradScaler
+from init_saving import create_filename
+import logging
+logger = logging.getLogger(__name__)
+
 
 def train_test(args):
     torch.manual_seed(args.seed)
@@ -39,15 +46,44 @@ def train_test(args):
     torch.cuda.manual_seed_all(args.seed)
 
     # Get data loaders.
-    dm = data_model(args)
+    dm = data_module(args)
     if args.zsl_type == "conventional":
-        train_dataloader = dm.conventional_train_dataloader
-        test_dataloader = dm.conventional_test_dataloader
+        train_dataloader, test_dataloader = dm.conventional_dataloader()
     elif args.zsl_type == "generalized":
-        train_dataloader = dm.generalized_train_dataloader
-        test_dataloader = dm.generalized_test_dataloader
+        train_dataloader, test_dataloader = dm.generalized_dataloader()
     else:
         NotImplementedError
+
+    # # load model
+    # pytorch_model = bagnets.pytorchnet.bagnet33(pretrained=True).cuda()
+    # pytorch_model.eval()
+
+    # for i, (X, label) in enumerate(train_dataloader):
+    #     original = X.cuda()
+    #     sample = X / 255.
+    #     sample -= np.array([0.485, 0.456, 0.406])[:, None, None]
+    #     sample /= np.array([0.229, 0.224, 0.225])[:, None, None]
+
+    #     # generate heatmap
+    #     heatmap = generate_heatmap_pytorch(pytorch_model, sample, label, 33)
+
+    #     # plot heatmap
+    #     fig = plt.figure(figsize=(8, 4))
+    #     original_image = original[0].permute(1, 2, 0).cpu()
+    #     # original_image = original[0].transpose(1, 2, 0)
+
+    #     ax = plt.subplot(121)
+    #     ax.set_title('original')
+    #     plt.imshow(original_image / 255.)
+    #     plt.axis('off')
+
+    #     ax = plt.subplot(122)
+    #     ax.set_title('heatmap')
+    #     plot_heatmap(heatmap, original_image, ax,
+    #                  dilation=0.5, percentile=99, alpha=.25)
+    #     plt.axis('off')
+
+    #     plt.show()
 
     args.num_total_iter = len(train_dataloader) * args.epochs
     warmup_iters = len(train_dataloader) * args.warmup_epochs
@@ -58,28 +94,9 @@ def train_test(args):
     else:
         weight_path = 'https://pl-bolts-weights.s3.us-east-2.amazonaws.com/cpc/cpcv2_weights/checkpoints/epoch%3D526.ckpt'
         backbone = CPCV2.load_from_checkpoint(weight_path, strict=False)
-        # # finetuner
-        # finetuner = SSLFineTuner(cpc_v2,
-        #                         in_features=cpc_v2.z_dim,
-        #                         num_classes=cpc_v2.num_classes)
-        # from pl_bolts.models.autoencoders import VAE
-        # # train
-        # trainer = pl.Trainer(num_processes=2)
-        # trainer.fit(finetuner, dm)
-        # # test
-        # trainer.test(datamodule=dm)
-        # generative_classifier = Generative_Classifier(args)
-
-    logging = utils.Logger(args.global_rank, args.save)
-    writer = utils.Writer(args.global_rank, args.save)
 
     arch_instance = utils.get_arch_cells(args.arch_instance)
-    model_inn_vae = inn_vae(args, writer, arch_instance).cuda()
-
-    logging.info('args = %s', args)
-    logging.info('param size = %fM ', utils.count_parameters_in_M(model_inn_vae))
-    logging.info('groups per scale: %s, total_groups: %d',
-                 model_inn_vae.groups_per_scale, sum(model_inn_vae.groups_per_scale))
+    model_inn_vae = inn_vae(args, arch_instance).cuda()
 
     if args.fast_adamax:
         # Fast adamax has the same functionality as torch.optim.Adamax, except it is faster.
@@ -93,10 +110,9 @@ def train_test(args):
                                            weight_decay=args.weight_decay,
                                            eps=1e-3)
 
-    cnn_scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(
-        cnn_optimizer,
-        float(args.epochs - args.warmup_epochs - 1),
-        eta_min=args.learning_rate_min)
+    cnn_scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(cnn_optimizer,
+                                                               float(args.epochs - args.warmup_epochs - 1), eta_min=args.learning_rate_min)
+
     grad_scalar = GradScaler(2**10)
 
     num_output = utils.num_output(args.dataset)
@@ -118,7 +134,7 @@ def train_test(args):
         global_step, init_epoch = 0, 0
 
     for epoch in range(init_epoch, args.epochs):
-        # update lrs.
+        # update lrs. # todo
         if args.distributed:
             train_dataloader.sampler.set_epoch(global_step + args.seed)
             test_dataloader.sampler.set_epoch(0)
@@ -130,8 +146,8 @@ def train_test(args):
         logging.info('epoch %d', epoch)
 
         # Training.
-        train_nelbo, global_step = train(train_dataloader, backbone, model_inn_vae,
-                                         cnn_optimizer, grad_scalar, global_step, warmup_iters, writer, logging)
+        train_nelbo, global_step = train_inn_vae(train_dataloader, backbone, model_inn_vae,
+                                                 cnn_optimizer, grad_scalar, global_step, warmup_iters, writer, logging)
         logging.info('train_nelbo %f', train_nelbo)
         writer.add_scalar('train/nelbo', train_nelbo, global_step)
 
@@ -149,8 +165,8 @@ def train_test(args):
                         output, torch.distributions.bernoulli.Bernoulli
                     ) else output.sample(t)
                     output_tiled = utils.tile_image(output_img, n)
-                    writer.add_image('generated_%0.1f' % t, output_tiled,
-                                     global_step)
+                    writer.add_image('generated_%0.1f' %
+                                     t, output_tiled, global_step)
 
             valid_neg_log_p, valid_nelbo = test(test_dataloader, backbone,
                                                 model_inn_vae, num_samples=10,
@@ -196,29 +212,37 @@ def train_test(args):
     writer.close()
 
 
-def train(args, train_dataloader, model_inn_vae, cnn_optimizer, grad_scalar,
-          global_step, warmup_iters, writer, logging):
+def train_inn_vae(args, train_dataloader, backbone, model_inn_vae, cnn_optimizer, grad_scalar,
+                  global_step, warmup_iters, writer, logging):
     alpha_i = utils.kl_balancer_coeff(num_scales=model_inn_vae.num_latent_scales,
                                       groups_per_scale=model_inn_vae.groups_per_scale,
                                       fun='square')
     nelbo = utils.AvgrageMeter()
     model_inn_vae.train()
-    for step, x in enumerate(train_dataloader):
+    num_train = len(train_dataloader)
+
+    for step, x, label in enumerate(train_dataloader):
         x = x[0] if len(x) > 1 else x
         x = x.cuda()
+        encoded_attributes = label2attribute(label)
+        recon, regul_z, regul_r, cross_entropy, mutual_info_wx = \
+            model_inn_vae(x, encoded_attributes, num_train)
 
+        alpha = 1
+        beta_r = 1
+        beta_z = 1
+        gamma = 1
+        # todo defining nn.parameters for backward propagation
+        asso_loss = recon - alpha*mutual_info_wx - \
+            beta_z*regul_z - beta_r*regul_r + gamma*cross_entropy
 
-        recon_loss, regul_z, regul_r, bayes_loss, mutual_info_wx = model_inn_vae(x, encoded_attributes, num_train)
+        # todo Loss rebalancing
+        # beta_x = 2. / (1 + beta)
+        # beta_y = 2. * beta / (1 + beta)
+        # loss = beta_x * L_x- beta_y * L_y
 
-        beta_x = 2. / (1 + beta)
-        beta_y = 2. * beta / (1 + beta)
-        loss = beta_x * L_x- beta_y * L_y
-
-        #todo defining nn.parameters for backward propagation
-        asso_loss = recon_loss - kl_z - kl_r + bayes_loss
-
-
-        intervention_loss = model_inn_vae.intervention()
+        if train_intervention is True:
+            intervention_loss = model_inn_vae.intervention()
 
         # warm-up lr
         if global_step < warmup_iters:
@@ -231,8 +255,8 @@ def train(args, train_dataloader, model_inn_vae, cnn_optimizer, grad_scalar,
             utils.average_params(model_inn_vae.parameters(), args.distributed)
 
         cnn_optimizer.zero_grad()
-        with autocast():
 
+        with autocast():
             output = model_inn_vae.decoder_output(logits)
             kl_coeff = utils.kl_coeff(
                 global_step, args.kl_anneal_portion * args.num_total_iter,
@@ -298,7 +322,7 @@ def train(args, train_dataloader, model_inn_vae, cnn_optimizer, grad_scalar,
             writer.add_scalar(
                 'train/recon_iter',
                 torch.mean(
-                    utils.reconstruction_loss(output, x,crop=model_inn_vae.crop_output)),
+                    utils.reconstruction_loss(output, x, crop=model_inn_vae.crop_output)),
                 global_step)
             writer.add_scalar('kl_coeff/coeff', kl_coeff, global_step)
             total_active = 0

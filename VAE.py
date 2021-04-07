@@ -9,7 +9,7 @@ from neural_ar_operations import ARConv2d
 from utils import get_stride_for_cell_type, get_input_size, groups_per_scale, get_arch_cells
 from distributions import Normal, DiscMixLogistic
 from inplaced_sync_batchnorm import SyncBatchNormSwish
-from inn_interv_classi import inn_classifier
+from inn_model import inn_classifier
 from models.flow.invertible_net import invertible_net
 import utils
 
@@ -58,7 +58,8 @@ class AutoEncoder(nn.Module):
 
         # AutoEncoder setting
         self.num_latent_scales = 2  # number of spatial scales that latent layers will reside
-        self.num_groups_per_scale = 1  # number of groups of latent vars. per scale default 64
+        # number of groups of latent vars. per scale default 64
+        self.num_groups_per_scale = 1
         self.residul_latent_dim = 256  # dimension of latent vars. per group
         self.groups_per_scale = 1
 
@@ -81,7 +82,8 @@ class AutoEncoder(nn.Module):
         # init prior and posterior
         self.in_chan_condition = args.in_chan_condition
         self.norm_prior_sampler, self.condition_encoder, \
-            self.inn_prior_sampler, self.posterior_sampler = self.init_pri_pos_sampler(args)
+            self.inn_prior_sampler, self.posterior_sampler = self.init_pri_pos_sampler(
+                args)
 
         self.generative_classifier = generative_classifier(
             self.condition_encoder, self.inn_prior_sampler, args.attribute)
@@ -329,12 +331,12 @@ class AutoEncoder(nn.Module):
                     num_w, row, col = weights[i].shape
                     self.sr_u[i] = F.normalize(torch.ones(num_w, row).normal_(
                         0, 1).cuda(),
-                                               dim=1,
-                                               eps=1e-3)
+                        dim=1,
+                        eps=1e-3)
                     self.sr_v[i] = F.normalize(torch.ones(num_w, col).normal_(
                         0, 1).cuda(),
-                                               dim=1,
-                                               eps=1e-3)
+                        dim=1,
+                        eps=1e-3)
                     # increase the number of iterations for the first time
                     num_iter = 10 * self.num_power_iter
 

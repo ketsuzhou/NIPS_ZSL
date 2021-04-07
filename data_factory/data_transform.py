@@ -1,5 +1,5 @@
 from torchvision import transforms
-from pl_bolts.transforms.self_supervised import  Patchify
+from pl_bolts.transforms.self_supervised import Patchify
 normalize = transforms.Normalize(mean=[0.485, 0.456, 0.406],
                                  std=[0.229, 0.224, 0.225])
 
@@ -46,7 +46,7 @@ def data_transform(name, size):
     return transform
     
 
-class TrainTransforms:
+class TrainTransforms():
     def __init__(self, patch_size=32, overlap=16):
         """
         Transforms used for CPC:
@@ -84,13 +84,13 @@ class TrainTransforms:
         rnd_gray = transforms.RandomGrayscale(p=0.25)
 
         post_transform = transforms.Compose([
-            transforms.ToTensor(),
             transforms.Normalize(mean=[0.485, 0.456, 0.406],
                                  std=[0.229, 0.224, 0.225]),
-            Patchify(patch_size=patch_size, overlap_size=overlap),
+            # Patchify(patch_size=patch_size, overlap_size=overlap),
         ])
 
         self.transforms = transforms.Compose([
+            transforms.ToTensor(),
             rand_crop,
             col_jitter,
             rnd_gray,
@@ -135,13 +135,14 @@ class TestTransforms:
         self.patch_size = patch_size
         self.overlap = overlap
         self.flip_lr = transforms.RandomHorizontalFlip(p=0.5)
+
         post_transform = transforms.Compose([
-            transforms.ToTensor(),
             transforms.Normalize(mean=[0.485, 0.456, 0.406],
                                  std=[0.229, 0.224, 0.225]),
             Patchify(patch_size=patch_size, overlap_size=overlap),
         ])
         self.transforms = transforms.Compose([
+            transforms.ToTensor(),
             transforms.Resize(224, interpolation=3),
             transforms.CenterCrop(128),
             post_transform

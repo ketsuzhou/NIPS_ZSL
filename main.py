@@ -1,7 +1,3 @@
-"""Train Flow++ on CIFAR-10.
-
-Train script adapted from: https://github.com/kuangliu/pytorch-cifar/
-"""
 import argparse
 import numpy as np
 import os
@@ -24,7 +20,7 @@ from tqdm import tqdm
 import yaml
 from configs.default import cfg, update_datasets
 # from generative_classifier import generative_classifier
-from data_model import data_model
+from data_module import data_module
 from data_factory.dataloader import IMAGE_LOADOR
 from pl_bolts.models.self_supervised import CPCV2, SSLFineTuner
 from pytorch_lightning import Trainer
@@ -43,7 +39,6 @@ def arg_parse():
                         type=str,
                         dest='cfg_file',
                         default='configs/ResNet101_AwA2_SS_C.yaml')
-
     # data loader params
     parser.add_argument('--data_root',
                         default='../../../media/data/',
@@ -55,6 +50,11 @@ def arg_parse():
                         default='AwA2',
                         choices=[],
                         help='which dataset to use')
+    parser.add_argument('--zsl_type',
+                        type=str,
+                        default='conventional',
+                        choices=[],
+                        help='')
     parser.add_argument('--split',
                         default='standard_split',
                         metavar='NAME',
@@ -63,7 +63,6 @@ def arg_parse():
                         action='store_true',
                         default=False,
                         help='enable cross validation mode')
-
     # experimental results
     parser.add_argument('--result_root',
                         type=str,
@@ -99,7 +98,7 @@ def arg_parse():
     # optimization
     parser.add_argument('--batch_size',
                         type=int,
-                        default=2,
+                        default=1,
                         help='batch size per GPU')
     parser.add_argument('--learning_rate',
                         type=float,
@@ -153,8 +152,7 @@ def arg_parse():
                         default=64,
                         type=int,
                         help='Number of samples at test time')
-    parser.add_argument('--num_workers',
-                        default=4,
+    parser.add_argument('--num_workers', default=1,
                         type=int,
                         help='Number of data loader threads')
     parser.add_argument('--resume',
@@ -197,8 +195,7 @@ def arg_parse():
         '--master_address',
         type=str,
         default='127.0.0.1',
-        help=
-        'address for master, master节点相当于参数服务器，其会向其他卡广播其参数,rank=0的进程就是master进程')
+        help='address for master, master节点相当于参数服务器，其会向其他卡广播其参数,rank=0的进程就是master进程')
 
     args = parser.parse_args()
     args.save = args.result_root + '/eval-' + args.save
@@ -223,37 +220,11 @@ def config_process(config):
     config.downsample = eval(config.downsample)
     config.in_shape = [2048, 7, 7]
 
-    if config.dataset == "AwA2":
-        config.attr_dims = 85
-        config.nseen = 40
-    elif config.dataset == "CUB":
-        config.attr_dims = 312
-        config.nseen = 150
-    elif config.dataset == "SUN":
-        config.attr_dims = 102
-        config.nseen = 645
-    else:
-        raise NotImplementedError
-
-    config.image_dir = os.path.join(config.data_root, config.dataset,
-                                    'images/')
-    config.class_file = os.path.join(config.data_root, config.dataset,
-                                     'classes.txt')
-    config.image_label = os.path.join(config.data_root, config.dataset,
-                                      'image_labels.txt')
-    config.attributes_file = os.path.join(config.data_root, config.dataset,
-                                          'class_attributes.txt')
-
-    config.train_classes = os.path.join(config.data_root, config.split,
-                                        config.dataset, 'trainvalclasses.txt')
-    config.test_classes = os.path.join(config.data_root, config.split,
-                                       config.dataset, 'testclasses.txt')
-
     if not os.path.exists(config.result_root):
         os.makedirs(config.result_root)
     # if not os.path.exists(config.model_root):
     # os.makedirs(config.model_root)
-    #namespace ==> dictionary
+    # namespace ==> dictionary
     return config
 
 
@@ -271,7 +242,6 @@ def init_processes(rank, size, fn, args):
 
 
 if __name__ == '__main__':
-    # Set seeds
     args = arg_parse()
     size = args.num_process_per_node
     if size > 1:

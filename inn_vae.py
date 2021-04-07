@@ -9,7 +9,7 @@ from neural_ar_operations import ARConv2d
 from utils import get_stride_for_cell_type, get_input_size, groups_per_scale, get_arch_cells
 from distributions import Normal, DiscMixLogistic
 from inplaced_sync_batchnorm import SyncBatchNormSwish
-from inn_interv_classi import inn_classifier, inn_intervention
+from inn_model import inn_classifier, inn_intervention
 from models.flow.invertible_net import invertible_net
 import utils
 
@@ -70,11 +70,7 @@ class inn_vae(nn.Module):
         self.in_shape = args.in_shape
         self.use_se = False
 
-        # AutoEncoder setting
-        self.residul_latent_dim = 256  # dimension of latent vars. per group
-
-        # encoder parameteres
-        self.num_enc = args.num_enc  # each halfs the height and width
+        # encoder parameteres# each halfs the height and width
         self.in_chan_enc = args.in_chan_enc
         mult = 1
         self.encoder, mult = self.init_encoder(mult)
@@ -97,6 +93,7 @@ class inn_vae(nn.Module):
         self.all_log_norm = []
         self.all_conv_layers = []
         self.all_bn_layers = []
+
         for n, layer in self.named_modules():
             # if isinstance(layer, Conv2D) and '_ops' in n:   # only chose those in cell
             if isinstance(layer, Conv2D) or isinstance(layer, ARConv2d):
@@ -106,12 +103,6 @@ class inn_vae(nn.Module):
                     isinstance(layer, SyncBatchNormSwish):
                 self.all_bn_layers.append(layer)
 
-        print('len log norm:', len(self.all_log_norm))
-        print('len bn:', len(self.all_bn_layers))
-        # left/right singular vectors used for SR
-        self.sr_u = {}
-        self.sr_v = {}
-        self.num_power_iter = 4
 
     def init_encoder(self, mult):
         encoder = nn.ModuleList()
@@ -228,7 +219,7 @@ class inn_vae(nn.Module):
         f_z = self.inn_prior_z(z_sample)
         log_jacobian_z = self.inn_prior_z.log_jacobian(run_forward=False)
 
-        log_p_f_z, bayes_loss = self.inn_classifier(f_z, y) # [batch, -1]
+        log_p_f_z, cross_entropy = self.inn_classifier(f_z, y) # [batch, -1]
 
         log_q_z = self.z_dis.log_p(z_sample)
 
@@ -257,7 +248,8 @@ class inn_vae(nn.Module):
             decodered = decoder(decodered)
         
         # todo testing L_2 distance
-        recon_loss = torch.cosine_similarity(
+        # here we use cosine_similarity which is bounded between [-1, 1] to ensure recon_loss in the same magnitude to other terms which are normalized.
+        recon = torch.cosine_similarity(
             torch.reshape(inputs, [batch_size, -1]), 
             torch.reshape(decodered, [batch_size, -1]))
         # channelwise_recon_loss = torch.cosine_similarity(
@@ -271,7 +263,13 @@ class inn_vae(nn.Module):
         mutual_info_wx = torch.reshape(log_q_w, [batch_size, -1]) \
              - torch.log(self.entropy_estimator(log_q_w, num_train))
 
-        return recon_loss, regul_z, regul_r, bayes_loss, mutual_info_wx
+        # perform rebalancing 
+        regul_z = torch.mean(regul_z, dim=[1]) 
+        regul_r = torch.mean(regul_r, dim=[1]) 
+        mutual_info_wx = torch.mean(mutual_info_wx, dim=[1]) 
+        recon = torch.mean(recon, dim=[1]) 
+
+        return recon, regul_z, regul_r, cross_entropy, mutual_info_wx
 
     def sample(self, num_samples, t):
         scale_ind = 0

@@ -160,6 +160,7 @@ def train(train_queue, model, cnn_optimizer, grad_scalar, global_step, warmup_it
             utils.average_params(model.parameters(), args.distributed)
 
         cnn_optimizer.zero_grad()
+        
         with autocast():
             logits, log_q, log_p, kl_all, kl_diag = model(x)
 
