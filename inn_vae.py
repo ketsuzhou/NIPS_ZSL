@@ -12,39 +12,7 @@ from inplaced_sync_batchnorm import SyncBatchNormSwish
 from inn_model import inn_classifier, inn_intervention
 from models.flow.invertible_net import invertible_net
 import utils
-
-
-class Cell(nn.Module):
-    def __init__(self, Cin, Cout, cell_type, arch, use_se):
-        super(Cell, self).__init__()
-        self.cell_type = cell_type
-
-        stride = get_stride_for_cell_type(self.cell_type)
-        self.skip = get_skip_connection(Cin,
-                                        stride,
-                                        affine=False,
-                                        channel_mult=2)
-        self.use_se = use_se
-        self._num_nodes = len(arch)
-        self._ops = nn.ModuleList()
-        for i in range(self._num_nodes):
-            stride = get_stride_for_cell_type(self.cell_type) if i == 0 else 1
-            C = Cin if i == 0 else Cout
-            primitive = arch[i]
-            op = OPS[primitive](C, Cout, stride)
-            self._ops.append(op)
-        # SE
-        if self.use_se:
-            self.se = SE(Cout, Cout)
-
-    def forward(self, s):
-        # skip branch
-        skip = self.skip(s)
-        for i in range(self._num_nodes):
-            s = self._ops[i](s)
-
-        s = self.se(s) if self.use_se else s
-        return skip + 0.1 * s
+from models.flow.flowpp_coupling import GatedAttn
 
 def cluster_distances(self, z, y=None):
 
@@ -60,73 +28,55 @@ def cluster_distances(self, z, y=None):
     z_i_mu_j = torch.mm(z, self.mu.squeeze().t())    # batchsize x n_classes
 
     return -2 * z_i_mu_j + z_i_z_i + mu_j_mu_j
-        
 
 class inn_vae(nn.Module):
-    def __init__(self, args, writer, arch_instance):
+    def __init__(self, args, arch_instance):
         super(inn_vae, self).__init__()
-        # self.writer = writer
-        self.arch_instance = arch_instance
         self.in_shape = args.in_shape
-        self.use_se = False
-
         # encoder parameteres# each halfs the height and width
         self.in_chan_enc = args.in_chan_enc
-        mult = 1
-        self.encoder, mult = self.init_encoder(mult)
-
+        self.encoder = self.init_encoder()
+        self.use_self_attn = 1
         # decoder parameters
         # number of cell for each conditional in decoder
         self.inn_dim_per_scale = 32
 
         # init prior and posterior
-        self.init_pri_pos(args)
-
-        # self.inn_prior_z = inn_classifier(
-        #     self.inn_prior_z, args.attribute)
+        self.init_prior(args)
         self.inn_classifier = inn_classifier()
+
         # init decoder
         self.num_decoder = self.num_encoder
-        self.decoder, mult = self.init_decoder(mult)
+        self.decoder = self.init_decoder()
 
-        # collect all norm params in Conv2D and gamma param in batchnorm
-        self.all_log_norm = []
-        self.all_conv_layers = []
-        self.all_bn_layers = []
+        # # collect all norm params in Conv2D and gamma param in batchnorm
+        # self.all_log_norm = []
+        # self.all_conv_layers = []
+        # self.all_bn_layers = []
 
-        for n, layer in self.named_modules():
-            # if isinstance(layer, Conv2D) and '_ops' in n:   # only chose those in cell
-            if isinstance(layer, Conv2D) or isinstance(layer, ARConv2d):
-                self.all_log_norm.append(layer.log_weight_norm)
-                self.all_conv_layers.append(layer)
-            if isinstance(layer, nn.BatchNorm2d) or isinstance(layer, nn.SyncBatchNorm) or \
-                    isinstance(layer, SyncBatchNormSwish):
-                self.all_bn_layers.append(layer)
+        # for n, layer in self.named_modules():
+        #     # if isinstance(layer, Conv2D) and '_ops' in n:   # only chose those in cell
+        #     if isinstance(layer, Conv2D) or isinstance(layer, ARConv2d):
+        #         self.all_log_norm.append(layer.log_weight_norm)
+        #         self.all_conv_layers.append(layer)
+        #     if isinstance(layer, nn.BatchNorm2d) or isinstance(layer, nn.SyncBatchNorm) or \
+        #             isinstance(layer, SyncBatchNormSwish):
+        #         self.all_bn_layers.append(layer)
 
-
-    def init_encoder(self, mult):
-        encoder = nn.ModuleList()
+    def init_encoder(self):
+        deterministic_encoder = nn.ModuleList()
+        num_ci = self.in_chan_deter_enc
         for _ in range(self.num_deter_enc):
-            num_ci = self.in_chan_deter_enc * mult
-            cell = Cell(num_ci,
+            conv = Conv2D(num_ci,
                         num_ci / 2,
-                        cell_type='normal_pre',
-                        arch=self.arch_instance['normal_pre'],
-                        use_se=self.use_se)
-            mult /= 2
-            encoder.append(cell)
-        return encoder, mult
+                        kernel_size=3,
+                        padding=1,
+                        bias=True)
+            num_ci /= 2
+            deterministic_encoder.append(conv)
+        return deterministic_encoder
 
-    def init_pri_pos(self, args):
-        in_chan_enc = self.in_chan_enc
-        # half_in_chan_stoch_enc = in_chan_stoch_enc / 2
-        self.posterior = Conv2D(in_chan_enc,
-                                      2 * self.residul_latent_dim +
-                                      2 * self.inn_dim_local,
-                                      kernel_size=3,
-                                      padding=1,
-                                      bias=True)
-
+    def init_prior(self, args):
         self.inn_prior_z = invertible_net(
             use_self_attn=args.use_self_attn,
             use_split=args.use_split,
@@ -134,56 +84,60 @@ class inn_vae(nn.Module):
             verbose=False,
             FlowBlocks_architecture=args.FlowBlocks_architecture,
             in_shape=self.inn_in_shape,
-            in_shape_condition_node=in_shape_condition_node,
+            in_shape_condition_node=args.in_shape_condition_node,
             mid_channels=args.num_channels,
             num_ConvAttnBlock=args.num_ConvAttnBlock,
             num_components=args.num_components,
             drop_prob=args.drop_prob)
 
-        self.inn_prior_r = invertible_net(
-            use_self_attn=args.use_self_attn,
-            use_split=args.use_split,
-            downsample=args.downsample,
-            verbose=False,
-            FlowBlocks_architecture=args.FlowBlocks_architecture,
-            in_shape=self.inn_in_shape,
-            in_shape_condition_node=None,
-            mid_channels=args.num_channels,
-            num_ConvAttnBlock=args.num_ConvAttnBlock,
-            num_components=args.num_components,
-            drop_prob=args.drop_prob,
-            num_InvAutoFC=1)
+        if self.c_use_nf_pri:
+            self.inn_prior_c = invertible_net(
+                use_self_attn=args.use_self_attn,
+                use_split=args.use_split,
+                downsample=args.downsample,
+                verbose=False,
+                FlowBlocks_architecture=args.FlowBlocks_architecture,
+                in_shape=self.inn_in_shape,
+                in_shape_condition_node=None,
+                mid_channels=args.num_channels,
+                num_ConvAttnBlock=args.num_ConvAttnBlock,
+                num_components=args.num_components,
+                drop_prob=args.drop_prob,
+                num_InvAutoFC=1)
 
-    def init_inn_intervention(self, args):
-        inn = invertible_net(
-            use_self_attn=args.use_self_attn,
-            use_split=args.use_split,
-            downsample=args.downsample,
-            verbose=False,
-            FlowBlocks_architecture=args.FlowBlocks_architecture,
-            in_shape=self.inn_in_shape,
-            in_shape_condition_node=None,
-            mid_channels=args.num_channels,
-            num_ConvAttnBlock=args.num_ConvAttnBlock,
-            num_components=args.num_components,
-            drop_prob=args.drop_prob,
-            num_InvAutoFC=1)
+        if self.r_use_nf_pri:
+            self.inn_prior_r = invertible_net(
+                use_self_attn=args.use_self_attn,
+                use_split=args.use_split,
+                downsample=args.downsample,
+                verbose=False,
+                FlowBlocks_architecture=args.FlowBlocks_architecture,
+                in_shape=self.inn_in_shape,
+                in_shape_condition_node=None,
+                mid_channels=args.num_channels,
+                num_ConvAttnBlock=args.num_ConvAttnBlock,
+                num_components=args.num_components,
+                drop_prob=args.drop_prob,
+                num_InvAutoFC=1)
 
-        self.inn_intervention = inn_intervention(inn )
 
     def init_decoder(self):
         decoder = nn.ModuleList()
-        mult = 1
+        num_ci = self.chan_in_deter_dec
         for _ in range(self.num_decoder):
-            num_ci = int(self.chan_in_deter_dec * mult)
-            cell = Cell(num_ci,
+            if self.use_self_attn:
+                attn = GatedAttn(num_ci, num_heads=4, drop_prob=0)
+                decoder.append(attn)
+
+            conv = Conv2D(
+                        num_ci,
                         num_ci * 2,
-                        cell_type='normal_post',
-                        arch=self.arch_instance['normal_post'],
-                        use_se=self.use_se)
-            mult *= 2
-        decoder.append(cell)
-        return decoder, mult
+                        kernel_size=3,
+                        padding=1,
+                        bias=True)
+            num_ci *= 2
+            decoder.append(conv)
+        return decoder
 
     def entropy_estimator(self, log_q_latent_condi_x, num_train):
         q_latent_condi_x = torch.exp(log_q_latent_condi_x)
@@ -192,7 +146,7 @@ class inn_vae(nn.Module):
 
         for i in range(batch_size):
             sum_q_over_remaining[i, :, :, :] -= q_latent_condi_x[i, :, :, :]
-         
+        
         q_latent = (1 / num_train )* q_latent_condi_x + \
             ((num_train - 1) / (num_train * (batch_size - 1))) * sum_q_over_remaining
         # upper bound of entropy for approximation
@@ -201,47 +155,73 @@ class inn_vae(nn.Module):
         log_q_latent = torch.reshape(torch.log(q_latent), [batch_size, -1]) 
         return log_q_latent
 
-    def intervention(self ):
+    def intervention_on_(self ):
         z_sample = self.z_dis.sample # [batch, 128, 7, 7]
         intervention_loss = self.inn_intervention(z_sample)
         return intervention_loss
 
-    def forward(self, inputs, encoded_attributes, num_train):
+    def forward(self, inputs, intervention_marsk_on_z, num_train):
         [batch_size, channels, height, weight] = inputs.size()
         # perform encoder
         for encoder in self.encoder:
             inputs = encoder(inputs)
 
-        mu1, log_var1, mu2, log_var2 = torch.chunk(inputs, 4, dim=1)
-
+        mu1, log_var1, mu2, log_var2, mu3, log_var3 = torch.chunk(inputs, 6, dim=1)
+        # for semantic discrimitive Z
         self.z_dis = Normal(mu1, log_var1)
         z_sample = self.z_dis.sample # [batch, 128, 7, 7]
-        f_z = self.inn_prior_z(z_sample)
+
+        f_z = self.inn_prior_z(z_sample, c=intervention_marsk_on_z)
+        
         log_jacobian_z = self.inn_prior_z.log_jacobian(run_forward=False)
-
         log_p_f_z, cross_entropy = self.inn_classifier(f_z, y) # [batch, -1]
-
         log_q_z = self.z_dis.log_p(z_sample)
-
         regul_z = log_p_f_z + log_jacobian_z - \
             torch.log(self.entropy_estimator(log_q_z, num_train))
 
-        # dis_z_a = self.inn_classifier.cluster_distances(f_z, encoded_attributes)
+        # for other semantic discrimitive c, compared to z not supervised by attributes
+        self.c_dis = Normal(mu2, log_var2)
+        c_sample = self.c_dis.sample 
+        if self.c_use_nf_pri == True:
+            f_c = self.inn_prior_c(c_sample)
+            log_jacobian_c = self.inn_prior_r.log_jacobian(run_forward=False)
+            normal_c = Normal(torch.zeros_like(f_c), torch.ones_like(f_c))
+        else:
+            # f is identical function
+            f_c = c_sample
+            log_jacobian_c = 0
+            normal_c = Normal(torch.zeros_like(f_c), torch.ones_like(f_c))
 
+        log_p_f_c = normal_c.log_p(f_c)
+        log_q_c = self.c_dis.log_p(c_sample)
+
+        regul_c = log_p_f_c + log_jacobian_c - torch.log(
+            self.entropy_estimator(log_q_c, num_train))
+        # residul non-semantic non-discrimitive r contains other information for reconstruction
+        # dis_z_a = self.inn_classifier.cluster_distances(f_z, encoded_attributes)
         # deter_z = self.inn_prior_z.log_jacobian_numerical #todo
-        self.r_dis = Normal(mu2, log_var2)
+        self.r_dis = Normal(mu3, log_var3)
         r_sample = self.r_dis.sample
-        f_r = self.inn_prior_r(r_sample)
-        normal = Normal(torch.zeros_like(f_r), torch.ones_like(f_r))
-        log_jacobian_r = self.inn_prior_r.log_jacobian(run_forward=False)
-        
-        log_p_f_r = normal.log_p(f_r)
+
+        if self.r_use_nf_pri == True:
+            f_r = self.inn_prior_r(r_sample)
+            log_jacobian_r = self.inn_prior_r.log_jacobian(run_forward=False)
+            normal_r = Normal(torch.zeros_like(f_r), torch.ones_like(f_r))
+        else:
+            # f is identical function
+            f_r = r_sample
+            log_jacobian_r = 0
+            normal_r = Normal(torch.zeros_like(f_r), torch.ones_like(f_r))
+
+        log_p_f_r = normal_r.log_p(f_r)
         log_q_r = self.r_dis.log_p(r_sample)
 
-        log_q_w = torch.cat(log_q_z, log_q_r, dim=1)
+        regul_r = log_p_f_r + log_jacobian_r - torch.log(
+            self.entropy_estimator(log_q_r, num_train))
 
-        w_sample = torch.cat(z_sample, r_sample)
-
+        # for w
+        log_q_w = torch.cat(log_q_z, log_q_c, log_q_r, dim=1)
+        w_sample = torch.cat(z_sample, c_sample, r_sample)
         decodered = w_sample
         # perform decoder
         for decoder in self.decoder:
@@ -256,9 +236,6 @@ class inn_vae(nn.Module):
         #     torch.reshape(inputs, [batch_size, channels, -1]), 
         #     torch.reshape(decodered, [batch_size, channels, -1]), dim=1)
 
-        regul_r = log_p_f_r + log_jacobian_r - torch.log(
-            self.entropy_estimator(log_q_r, num_train))
-        
         # 
         mutual_info_wx = torch.reshape(log_q_w, [batch_size, -1]) \
              - torch.log(self.entropy_estimator(log_q_w, num_train))
@@ -269,7 +246,7 @@ class inn_vae(nn.Module):
         mutual_info_wx = torch.mean(mutual_info_wx, dim=[1]) 
         recon = torch.mean(recon, dim=[1]) 
 
-        return recon, regul_z, regul_r, cross_entropy, mutual_info_wx
+        return recon, regul_z, regul_c, regul_r, cross_entropy, mutual_info_wx
 
     def sample(self, num_samples, t):
         scale_ind = 0

@@ -156,23 +156,26 @@ class data_module():
         matcontent = sio.loadmat(file_path)
         des = matcontent['attributes'].flatten()
 
-        # print('Unsupervised Attr')
-        # class_path = './AWA2_attribute.pkl'
-        # with open(class_path, 'rb') as f:
-        #     w2v_class = pickle.load(f)
-        # assert w2v_class.shape == (50, 300)
-        # w2v_class = torch.tensor(w2v_class).float()
+        print('Unsupervised Attr')
+        class_path = './AWA2_attribute.pkl'
+        with open(class_path, 'rb') as f:
+            w2v_class = pickle.load(f)
+        assert w2v_class.shape == (85, 300)
+        w2v_class = torch.tensor(w2v_class).float()
 
-        # U, s, V = torch.svd(w2v_class)
-        # reconstruct = torch.mm(torch.mm(U,torch.diag(s)),torch.transpose(V,1,0))
-        # print('sanity check: {}'.format(torch.norm(reconstruct-w2v_class).item()))
+        U, s, V = torch.svd(w2v_class) # w2v_class = U * s * V^T, rows in V are orthoganal to each other, so are treated as world vectors.
+        reconstruct = torch.mm(torch.mm(U, torch.diag(s)),
+                               torch.transpose(V, 1, 0))
 
-        # print('shape U:{} V:{}'.format(U.size(),V.size()))
-        # print('s: {}'.format(s))
+        print('sanity check: {}'.format(
+            torch.norm(reconstruct-w2v_class).item()))
 
-        # self.w2v_att = torch.transpose(V,1,0).to(self.device)
-        # self.att = torch.mm(U,torch.diag(s)).to(self.device)
-        # self.normalize_att = torch.mm(U,torch.diag(s)).to(self.device)
+        print('shape U:{} V:{}'.format(U.size(), V.size()))
+        print('s: {}'.format(s))
+
+        self.w2v_att = torch.transpose(V, 1, 0) # words vector
+        self.att = torch.mm(U, torch.diag(s)) # attributes strenth
+        self.normalize_att = torch.mm(U, torch.diag(s))
 
         self.all_data_path, self.all_data_labels, self.name2label = image_load(
             class_file, image_label)

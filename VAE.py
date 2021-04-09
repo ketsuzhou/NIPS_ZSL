@@ -116,18 +116,19 @@ class AutoEncoder(nn.Module):
         self.sr_v = {}
         self.num_power_iter = 4
 
-    def init_deterministic_encoder(self, mult):
+    def init_deterministic_encoder(self):
         deterministic_encoder = nn.ModuleList()
+        num_ci = self.in_chan_deter_enc
         for _ in range(self.num_deter_enc):
-            num_ci = self.in_chan_deter_enc * mult
-            cell = Cell(num_ci,
+            conv = Conv2D(num_ci,
                         num_ci / 2,
-                        cell_type='normal_pre',
-                        arch=self.arch_instance['normal_pre'],
-                        use_se=self.use_se)
-            mult /= 2
-            deterministic_encoder.append(cell)
-        return deterministic_encoder, mult
+                        kernel_size=3,
+                        padding=1,
+                        bias=True)
+            num_ci /= 2
+            deterministic_encoder.append(conv)
+
+        return deterministic_encoder
 
     def init_stochastic_encoder(self):
         in_chan_stoch_enc = self.in_chan_stoch_enc

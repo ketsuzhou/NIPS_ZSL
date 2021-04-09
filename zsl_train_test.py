@@ -29,6 +29,7 @@ from pl_bolts.models.self_supervised import CPCV2, SSLFineTuner
 from pytorch_lightning import Trainer
 import pytorch_lightning as pl
 import utils
+from models.flow.flowpp_coupling import GatedAttn
 from torch.multiprocessing import Process
 import torch.distributed as dist
 from inn_vae import inn_vae
@@ -82,7 +83,6 @@ def train_test(args):
     #     plot_heatmap(heatmap, original_image, ax,
     #                  dilation=0.5, percentile=99, alpha=.25)
     #     plt.axis('off')
-
     #     plt.show()
 
     args.num_total_iter = len(train_dataloader) * args.epochs
