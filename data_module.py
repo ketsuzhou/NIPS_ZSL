@@ -17,6 +17,34 @@ from data_factory.data_transform import TrainTransforms, TestTransforms
 torchvision.datasets.ImageNet
 
 
+def normalize(X):
+    X = X.cuda()
+    mean = torch.mean(X, axis=0)
+    centerized = X - mean
+    
+    n = X.size()[0]
+    ones = torch.ones(n).view([n, 1])
+    h = ((1/n) * torch.mm(ones, ones.t())) 
+    H = torch.eye(n) - h
+    H = H.cuda()
+    X_center = torch.mm(H.double(), X.double())
+    return X_center
+
+def PCA_svd(X, k, center=True):
+    X = X.cuda()
+    n = X.size()[0]
+    ones = torch.ones(n).view([n, 1])
+    h = ((1/n) * torch.mm(ones, ones.t())
+         ) if center else torch.zeros(n*n).view([n, n])
+    H = torch.eye(n) - h
+    H = H.cuda()
+    X_center = torch.mm(H.double(), X.double())
+    u, s, v = torch.svd(X_center)
+    components = v[:k].t()
+    # explained_variance = torch.mul(s[:k], s[:k])/(n-1)
+    return components
+
+
 def image_load(class_file, label_file):
     with open(class_file, 'r') as f:
         class_names = [l.strip() for l in f.readlines()]
@@ -141,7 +169,8 @@ class data_module():
                                                   'predicate-matrix-continuous.txt')
         self.continuous_attributes = read_attribute(continuous_attributes_file)
         self.binary_attributes = read_attribute(binary_attributes_file)
-
+        self.num_classes = len(self.binary_attributes)
+        
         matcontent = sio.loadmat(
             args.data_root + "/" + args.dataset + "/" + "att_splits.mat")
         self.attribute = torch.from_numpy(matcontent['att'].T).float()
@@ -152,29 +181,34 @@ class data_module():
         # self.attribute /= self.attribute.pow(2).sum(1).sqrt().unsqueeze(
         #     1).expand(self.attribute.size(0), self.attribute.size(1))
 
-        file_path = './attribute/SUN/attributes.mat'
-        matcontent = sio.loadmat(file_path)
-        des = matcontent['attributes'].flatten()
 
-        print('Unsupervised Attr')
         class_path = './AWA2_attribute.pkl'
         with open(class_path, 'rb') as f:
-            w2v_class = pickle.load(f)
-        assert w2v_class.shape == (85, 300)
-        w2v_class = torch.tensor(w2v_class).float()
+            w2v = pickle.load(f)
 
-        U, s, V = torch.svd(w2v_class) # w2v_class = U * s * V^T, rows in V are orthoganal to each other, so are treated as world vectors.
+        w2v = torch.tensor(w2v).float()
+        w2v
+        centerized_w2v = centerize(w2v)
+        #49 * c = len(w2v) * num_pca_component, num_pca_component is set to 49
+        # components = PCA_svd(w2v, 300)
+
+        torch.einsum('ij, kj->ik', w2v, w2v)
+        torch.einsum('ij, ij->i', w2v, w2v)
+        torch.einsum('ij, ')
+
+        # w2v_class = U * s * V^T, rows in V are orthoganal to each other, so are treated as word vectors.
+        U, s, V = torch.svd(w2v)
         reconstruct = torch.mm(torch.mm(U, torch.diag(s)),
                                torch.transpose(V, 1, 0))
 
         print('sanity check: {}'.format(
-            torch.norm(reconstruct-w2v_class).item()))
+            torch.norm(reconstruct-w2v).item()))
 
         print('shape U:{} V:{}'.format(U.size(), V.size()))
         print('s: {}'.format(s))
 
-        self.w2v_att = torch.transpose(V, 1, 0) # words vector
-        self.att = torch.mm(U, torch.diag(s)) # attributes strenth
+        self.w2v_att = torch.transpose(V, 1, 0)  # words vector
+        self.att = torch.mm(U, torch.diag(s))  # attributes strenth
         self.normalize_att = torch.mm(U, torch.diag(s))
 
         self.all_data_path, self.all_data_labels, self.name2label = image_load(
