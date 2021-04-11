@@ -17,18 +17,13 @@ from data_factory.data_transform import TrainTransforms, TestTransforms
 torchvision.datasets.ImageNet
 
 
-def normalize(X):
-    X = X.cuda()
-    mean = torch.mean(X, axis=0)
-    centerized = X - mean
-    
-    n = X.size()[0]
-    ones = torch.ones(n).view([n, 1])
-    h = ((1/n) * torch.mm(ones, ones.t())) 
-    H = torch.eye(n) - h
-    H = H.cuda()
-    X_center = torch.mm(H.double(), X.double())
-    return X_center
+def normalization(dataMat):
+    meanVal = torch.mean(dataMat, axis=0)
+    newData = dataMat-meanVal
+    m = torch.max(torch.einsum('ij, ij -> i ', newData, newData))
+    newData /= m
+    return newData
+
 
 def PCA_svd(X, k, center=True):
     X = X.cuda()
@@ -132,8 +127,8 @@ def read_attribute(attributes_file):
         for line in f.readlines():
             # attributes = torch.cat(attributes, torch.tensor(
             #     [int(x) for x in line.split()]), dim=0)
-            attributes.append(torch.tensor(
-                [float(x) for x in line.split()]))
+            attributes.append(
+                [float(x) for x in line.split()])
     return attributes
 
 
@@ -142,20 +137,6 @@ class data_module():
         self.batch_size = args.batch_size
         self.train_transforms = TrainTransforms()
         self.test_transforms = TestTransforms()
-
-        # normalize = transforms.Normalize(mean=[0.485, 0.456, 0.406],
-        #                                  std=[0.229, 0.224, 0.225])
-        # self.train_transforms = transforms.Compose([
-        #     transforms.Resize(256),
-        #     transforms.RandomResizedCrop(224, (0.08, 1), (0.5, 4.0 / 3)),
-        #     transforms.RandomHorizontalFlip(),
-        #     transforms.ToTensor(),
-        #     normalize])
-        # self.test_transforms = transforms.Compose([
-        #     transforms.Resize(256),
-        #     transforms.CenterCrop(224),
-        #     transforms.ToTensor(),
-        #     normalize])
 
         self.num_workers = args.num_workers
         self.image_dir = os.path.join(
@@ -170,47 +151,29 @@ class data_module():
         self.continuous_attributes = read_attribute(continuous_attributes_file)
         self.binary_attributes = read_attribute(binary_attributes_file)
         self.num_classes = len(self.binary_attributes)
-        
-        matcontent = sio.loadmat(
-            args.data_root + "/" + args.dataset + "/" + "att_splits.mat")
-        self.attribute = torch.from_numpy(matcontent['att'].T).float()
+        self.binary_attributes = torch.tensor(self.binary_attributes)
 
-        matcontent1 = sio.loadmat(
-            args.data_root + "/" + "CUB" + "/" + "att_splits.mat")
-        self.attribute1 = torch.from_numpy(matcontent1['att'].T).float()
-        # self.attribute /= self.attribute.pow(2).sum(1).sqrt().unsqueeze(
-        #     1).expand(self.attribute.size(0), self.attribute.size(1))
-
+        # matcontent = sio.loadmat(
+        #     args.data_root + "/" + args.dataset + "/" + "att_splits.mat")
+        # self.attribute = torch.from_numpy(matcontent['att'].T).float()
 
         class_path = './AWA2_attribute.pkl'
         with open(class_path, 'rb') as f:
             w2v = pickle.load(f)
 
-        w2v = torch.tensor(w2v).float()
-        w2v
-        centerized_w2v = centerize(w2v)
-        #49 * c = len(w2v) * num_pca_component, num_pca_component is set to 49
-        # components = PCA_svd(w2v, 300)
+        w2v = torch.tensor(w2v)
+        self.normalized_w2v = normalization(w2v).to(torch.float32)
 
-        torch.einsum('ij, kj->ik', w2v, w2v)
-        torch.einsum('ij, ij->i', w2v, w2v)
-        torch.einsum('ij, ')
+        class_embedings = torch.einsum(
+            'ca, ad -> cd', self.binary_attributes, self.normalized_w2v)
 
-        # w2v_class = U * s * V^T, rows in V are orthoganal to each other, so are treated as word vectors.
-        U, s, V = torch.svd(w2v)
-        reconstruct = torch.mm(torch.mm(U, torch.diag(s)),
-                               torch.transpose(V, 1, 0))
-
-        print('sanity check: {}'.format(
-            torch.norm(reconstruct-w2v).item()))
-
-        print('shape U:{} V:{}'.format(U.size(), V.size()))
-        print('s: {}'.format(s))
-
-        self.w2v_att = torch.transpose(V, 1, 0)  # words vector
-        self.att = torch.mm(U, torch.diag(s))  # attributes strenth
-        self.normalize_att = torch.mm(U, torch.diag(s))
-
+        intervented_embedings = {}
+        for i in range(len(self.binary_attributes)):
+            index = (self.binary_attributes[i] == 1).nonzero().squeeze(1)
+            intervented_embedings[f'intervention_for_class_{i}'] = class_embedings[i] - \
+                self.normalized_w2v[index]
+        self.intervented_embedings = intervented_embedings
+        
         self.all_data_path, self.all_data_labels, self.name2label = image_load(
             class_file, image_label)
 
