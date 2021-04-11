@@ -669,6 +669,16 @@ class ForwardTrainer(Trainer):
         else:
             results = self.model(x, **forward_kwargs)
 
+        if intervention_inn == 'semantic_patch':
+            intervention_loss = self.intervention_on_patch(label, intervented_patches, embedings_after_intervention)
+        
+        if intervention_vae == 'semantic_attributes':
+            
+        elif intervention_vae == 'semantic_nondiscriminative':
+            pass
+        elif intervention_vae == 'nondiscriminative':
+            pass
+
         if len(results) == 4:
             x_reco, log_prob, u, hidden = results
         else:

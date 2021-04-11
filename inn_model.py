@@ -20,8 +20,8 @@ class inn_classifier(nn.Module):
 
         mu_populate_dims = int(np.prod(self.dims))
         init_latent_scale = 5.0
-        init_scale = init_latent_scale / \
-            np.sqrt(2 * mu_populate_dims // self.num_classes)
+        init_scale = init_latent_scale / np.sqrt(2 * mu_populate_dims // self.num_classes)
+
         for k in range(mu_populate_dims // self.n_classes):
             self.mu.data[0, :, self.n_classes * k: self.n_classes *
                          (k+1)] = init_scale * torch.eye(self.n_classes)
@@ -128,6 +128,7 @@ class inn_classifier(nn.Module):
     def sample(self, y, temperature=1.):
         z = temperature * torch.randn(y.shape[0], self.ndim_tot).cuda()
         mu = torch.sum(y.round().view(-1, self.n_classes, 1) * self.mu, dim=1)
+        
         return self.invertible_net(z, rev=True)
 
     def save(self, fname):

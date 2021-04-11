@@ -42,9 +42,9 @@ def PCA_svd(X, k, center=True):
 
 def image_load(class_file, label_file):
     with open(class_file, 'r') as f:
-        class_names = [l.strip() for l in f.readlines()]
+        label2names = [l.strip() for l in f.readlines()]
     class_map = {}
-    for i, l in enumerate(class_names):
+    for i, l in enumerate(label2names):
         items = l.split()
         class_map[items[-1]] = i
     # print(class_map)
@@ -98,7 +98,6 @@ def split_byclass(seen_classes, unseen_classes, all_data_path, labels,
 
 class DataSet(data.Dataset):
     'Characterizes a dataset for PyTorch'
-
     def __init__(self, image_dir, data_path, labels, transform):
         'Initialization'
         self.labels = labels
@@ -142,7 +141,7 @@ class data_module():
         self.image_dir = os.path.join(
             args.data_root, args.dataset, 'JPEGImages/')
         class_file = os.path.join(args.data_root, args.dataset, 'classes.txt')
-        image_label = os.path.join(args.data_root, args.dataset,
+        image_path2label = os.path.join(args.data_root, args.dataset,
                                    'image_labels.txt')
         binary_attributes_file = os.path.join(args.data_root, args.dataset,
                                               'predicate-matrix-binary.txt')
@@ -164,18 +163,19 @@ class data_module():
         w2v = torch.tensor(w2v)
         self.normalized_w2v = normalization(w2v).to(torch.float32)
 
-        class_embedings = torch.einsum(
+        self.class_embedings = torch.einsum(
             'ca, ad -> cd', self.binary_attributes, self.normalized_w2v)
 
-        intervented_embedings = {}
+        embedings_after_intervention = {}
         for i in range(len(self.binary_attributes)):
             index = (self.binary_attributes[i] == 1).nonzero().squeeze(1)
-            intervented_embedings[f'intervention_for_class_{i}'] = class_embedings[i] - \
-                self.normalized_w2v[index]
-        self.intervented_embedings = intervented_embedings
+            embedings_after_intervention[f'intervention_for_class_{i}'] = \
+                self.class_embedings[i] - self.normalized_w2v[index]
+
+        self.embedings_after_intervention = embedings_after_intervention
         
         self.all_data_path, self.all_data_labels, self.name2label = image_load(
-            class_file, image_label)
+            class_file, image_path2label)
 
         seen_classes = os.path.join(args.data_root, args.split, args.dataset,
                                     'trainvalclasses.txt')

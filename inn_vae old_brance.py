@@ -165,31 +165,13 @@ class inn_vae(nn.Module):
 
         return intervention_loss
     
-    def intervention_on_z(self, inputs, labels):
-        intervention_loss = 0
-        f_z_sample = self.inn_classifier.sample(labels)
-        
-        z_sample = self.inn_prior_z(f_z_sample, rev=True)
-        log_jacobian_z = self.inn_prior_z.log_jacobian(run_forward=True)
-
-        w = torch.cat(z_sample, self.r_sample)
-
-        decodered = w
-        for decoder in self.decoder:
-            decodered = decoder(decodered)
-
-        feature_map = torch.mean(decodered, dim=[2, 3])
-
-        torch.log_softmax()
-
-        return feature_map
+    def intervention_on_z():
 
     def intervention_on_c(inputs, ):
         intervention_loss = 0
         self.z_sample
-        self.r_sample
-
-        return intervention_loss
+        
+        inputs
 
     def forward(self, inputs, label, intervention_inn, intervention_vae, 
     num_train, intervented_patches, changed_attribute):
@@ -198,7 +180,7 @@ class inn_vae(nn.Module):
         for encoder in self.encoder:
             inputs = encoder(inputs)
 
-        mu1, log_var1, mu2, log_var2 = torch.chunk(inputs, 4, dim=1)
+        mu1, log_var1, mu2, log_var2, mu3, log_var3 = torch.chunk(inputs, 6, dim=1)
         # for semantic discrimitive Z
         self.z_dis = Normal(mu1, log_var1)
         self.z_sample = self.z_dis.sample # [batch, 128, 7, 7]
@@ -211,39 +193,55 @@ class inn_vae(nn.Module):
         regul_z = log_p_f_z + log_jacobian_z - \
             torch.log(self.entropy_estimator(log_q_z, self.num_train))
 
+        # for other semantic discrimitive c, compared to z not supervised by attributes
+        self.c_dis = Normal(mu2, log_var2)
+        c_sample = self.c_dis.sample 
+        if self.c_use_nf_pri == True:
+            f_c = self.inn_prior_c(c_sample)
+            log_jacobian_c = self.inn_prior_r.log_jacobian(run_forward=False)
+            normal_c = Normal(torch.zeros_like(f_c), torch.ones_like(f_c))
+        else:
+            # f is identical function
+            f_c = c_sample
+            log_jacobian_c = 0
+            normal_c = Normal(torch.zeros_like(f_c), torch.ones_like(f_c))
+
+        log_p_f_c = normal_c.log_p(f_c)
+        log_q_c = self.c_dis.log_p(c_sample)
+
+        regul_c = log_p_f_c + log_jacobian_c - torch.log(
+            self.entropy_estimator(log_q_c, num_train))
+            
         # residul non-semantic non-discrimitive r contains other information for reconstruction
         # dis_z_a = self.inn_classifier.cluster_distances(f_z, encoded_attributes)
         # deter_z = self.inn_prior_z.log_jacobian_numerical #todo
-        self.r_dis = Normal(mu2, log_var2)
-        self.r_sample = self.r_dis.sample
+        self.r_dis = Normal(mu3, log_var3)
+        r_sample = self.r_dis.sample
 
         if self.r_use_nf_pri == True:
-            f_r = self.inn_prior_r(self.r_sample)
+            f_r = self.inn_prior_r(r_sample)
             log_jacobian_r = self.inn_prior_r.log_jacobian(run_forward=False)
             normal_r = Normal(torch.zeros_like(f_r), torch.ones_like(f_r))
         else:
             # f is identical function
-            f_r = self.r_sample
+            f_r = r_sample
             log_jacobian_r = 0
             normal_r = Normal(torch.zeros_like(f_r), torch.ones_like(f_r))
 
         log_p_f_r = normal_r.log_p(f_r)
-        log_q_r = self.r_dis.log_p(self.r_sample)
+        log_q_r = self.r_dis.log_p(r_sample)
 
         regul_r = log_p_f_r + log_jacobian_r - torch.log(
             self.entropy_estimator(log_q_r, num_train))
 
         # for w
-        log_q_w = torch.cat(log_q_z, log_q_r, dim=1)
-        w_sample = torch.cat(self.z_sample, self.r_sample)
+        log_q_w = torch.cat(log_q_z, log_q_c, log_q_r, dim=1)
+        w_sample = torch.cat(z_sample, c_sample, r_sample)
         decodered = w_sample
         # perform decoder
         for decoder in self.decoder:
             decodered = decoder(decodered)
-
-        mutual_info_wx = torch.reshape(log_q_w, [batch_size, -1]) \
-            - torch.log(self.entropy_estimator(log_q_w, num_train))
-
+        
         # todo testing L_2 distance
         # here we use cosine_similarity which is bounded between [-1, 1] to ensure recon_loss in the same magnitude to other terms which are normalized.
         recon = torch.cosine_similarity(
@@ -253,13 +251,17 @@ class inn_vae(nn.Module):
         #     torch.reshape(inputs, [batch_size, channels, -1]), 
         #     torch.reshape(decodered, [batch_size, channels, -1]), dim=1)
 
+        # 
+        mutual_info_wx = torch.reshape(log_q_w, [batch_size, -1]) \
+             - torch.log(self.entropy_estimator(log_q_w, num_train))
+
         # perform rebalancing 
         regul_z = torch.mean(regul_z, dim=[1]) 
         regul_r = torch.mean(regul_r, dim=[1]) 
         mutual_info_wx = torch.mean(mutual_info_wx, dim=[1]) 
         recon = torch.mean(recon, dim=[1]) 
 
-        return recon, regul_z, regul_r, cross_entropy, mutual_info_wx
+        return recon, regul_z, regul_c, regul_r, cross_entropy, mutual_info_wx
 
     def sample(self, num_samples, t):
         scale_ind = 0
