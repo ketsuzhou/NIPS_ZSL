@@ -13,6 +13,8 @@ from inn_model import inn_classifier, inn_intervention
 from models.flow.invertible_net import invertible_net
 import utils
 from models.flow.flowpp_coupling import GatedAttn
+import random
+from pl_bolts.models.self_supervised import CPCV2
 
 def cluster_distances(self, z, y=None):
 
@@ -48,6 +50,9 @@ class inn_vae(nn.Module):
         # init decoder
         self.num_decoder = self.num_encoder
         self.decoder = self.init_decoder()
+
+        weight_path = 'https://pl-bolts-weights.s3.us-east-2.amazonaws.com/cpc/cpcv2_weights/checkpoints/epoch%3D526.ckpt'
+        self.backbone = CPCV2.load_from_checkpoint(weight_path, strict=False)
 
         # # collect all norm params in Conv2D and gamma param in batchnorm
         # self.all_log_norm = []
@@ -155,45 +160,47 @@ class inn_vae(nn.Module):
         log_q_latent = torch.reshape(torch.log(q_latent), [batch_size, -1]) 
         return log_q_latent
 
-    def intervention_on_patch(self, label, intervented_patches, embedings_after_intervention):
-        intervention_loss = 0
-        for patch in intervented_patches:
-            f_z = self.inn_prior_z(self.z_sample , c=patch)
-            log_jacobian_z = self.inn_prior_z.log_jacobian(run_forward=False)
-            log_p_f_z, cross_entropy = self.inn_classifier(f_z, label, embedings_after_intervention) # [batch, -1]
-            intervention_loss = log_p_f_z + cross_entropy
+    def intervention_on_patch(self, label, intervented_patch, embedings_after_intervention):
+        f_z = self.inn_prior_z(self.z_sample, c=intervented_patch)
+        log_jacobian_z = self.inn_prior_z.log_jacobian(run_forward=False)
+        log_p_f_z, cross_entropy = self.inn_classifier(f_z, label, embedings_after_intervention)
 
-        return intervention_loss
+        return log_p_f_z, log_jacobian_z, cross_entropy
     
-    def intervention_on_z(self, inputs, labels):
-        intervention_loss = 0
-        f_z_sample = self.inn_classifier.sample(labels)
-        
-        z_sample = self.inn_prior_z(f_z_sample, rev=True)
-        log_jacobian_z = self.inn_prior_z.log_jacobian(run_forward=True)
-
-        w = torch.cat(z_sample, self.r_sample)
-
-        decodered = w
+    def decoder(self, input):
         for decoder in self.decoder:
-            decodered = decoder(decodered)
+            input = decoder(input)
+        return input
 
+    def intervention_on_z(self):
+        # f_z_sample = self.inn_classifier.sample(labels)
+        shuffle = random.shuffle(list(range(self.batch_size))) 
+        shuffled_z_sample = self.z_sample[shuffle, :, :, :]
+
+        w_sample = torch.cat(shuffled_z_sample, self.r_sample)
+        decodered = self.decoder(w_sample)
+        
         feature_map = torch.mean(decodered, dim=[2, 3])
-
-        torch.log_softmax()
 
         return feature_map
 
-    def intervention_on_c(inputs, ):
-        intervention_loss = 0
-        self.z_sample
-        self.r_sample
+    def intervention_on_c(self):
+        shuffle = random.shuffle(list(range(self.batch_size))) 
+        shuffled_r_sample = self.r_sample[shuffle, :, :, :]
 
-        return intervention_loss
+        w_sample = torch.cat(shuffled_r_sample, self.r_sample)
+        decodered = self.decoder(w_sample)
 
-    def forward(self, inputs, label, intervention_inn, intervention_vae, 
-    num_train, intervented_patches, changed_attribute):
-        [batch_size, channels, height, weight] = inputs.size()
+        feature_map = torch.mean(decodered, dim=[2, 3])
+
+        return feature_map
+
+    def forward(self, inputs, label, num_train):
+
+        with torch.no_grad():
+            feature_map = self.backbone(inputs)
+
+        [batch_size, channels, height, weight] = feature_map.size()
         # perform encoder
         for encoder in self.encoder:
             inputs = encoder(inputs)
@@ -236,10 +243,8 @@ class inn_vae(nn.Module):
         # for w
         log_q_w = torch.cat(log_q_z, log_q_r, dim=1)
         w_sample = torch.cat(self.z_sample, self.r_sample)
-        decodered = w_sample
         # perform decoder
-        for decoder in self.decoder:
-            decodered = decoder(decodered)
+        decodered = self.decoder(w_sample)
 
         mutual_info_wx = torch.reshape(log_q_w, [batch_size, -1]) \
             - torch.log(self.entropy_estimator(log_q_w, num_train))
@@ -261,97 +266,66 @@ class inn_vae(nn.Module):
 
         return recon, regul_z, regul_r, cross_entropy, mutual_info_wx
 
-    def sample(self, num_samples, t):
-        scale_ind = 0
-        z0_size = [num_samples] + self.z0_size
-        dist = Normal(mu=torch.zeros(z0_size).cuda(),
-                      log_sigma=torch.zeros(z0_size).cuda(),
-                      temp=t)
-        z, _ = dist.sample()
+    def counterfacture(self,):
+        pass
 
-        idx_dec = 0
-        s = self.prior_ftr0.unsqueeze(0)
-        s = s.expand(self.batch_size, -1, -1, -1)
-        for cell in self.stochastic_decoder:
-            if cell.cell_type == 'combiner_dec':
-                if idx_dec > 0:
-                    # form prior
-                    param = self.prior_sampler[idx_dec - 1](s)
-                    mu, log_sigma = torch.chunk(param, 2, dim=1)
-                    dist = Normal(mu, log_sigma, t)
-                    z, _ = dist.sample()
+    # def spectral_norm_parallel(self):
+    #     """ This method computes spectral normalization for all conv layers in parallel. This method should be called after calling the forward method of all the conv layers in each iteration. """
 
-                # 'combiner_dec'
-                s = cell(s, z)
-                idx_dec += 1
-            else:
-                s = cell(s)
-                if cell.cell_type == 'up_dec':
-                    scale_ind += 1
+    #     weights = {}  # a dictionary indexed by the shape of weights
+    #     for l in self.all_conv_layers:
+    #         weight = l.weight_normalized
+    #         weight_mat = weight.view(weight.size(0), -1)
+    #         if weight_mat.shape not in weights:
+    #             weights[weight_mat.shape] = []
 
-        for cell in self.deterministic_decoder:
-            s = cell(s)
+    #         weights[weight_mat.shape].append(weight_mat)
 
-        logits = self.image_conditional(s)
-        return logits
+    #     loss = 0
+    #     for i in weights:
+    #         weights[i] = torch.stack(weights[i], dim=0)
+    #         with torch.no_grad():
+    #             num_iter = self.num_power_iter
+    #             if i not in self.sr_u:
+    #                 num_w, row, col = weights[i].shape
+    #                 self.sr_u[i] = F.normalize(torch.ones(num_w, row).normal_(
+    #                     0, 1).cuda(),
+    #                                            dim=1,
+    #                                            eps=1e-3)
+    #                 self.sr_v[i] = F.normalize(torch.ones(num_w, col).normal_(
+    #                     0, 1).cuda(),
+    #                                            dim=1,
+    #                                            eps=1e-3)
+    #                 # increase the number of iterations for the first time
+    #                 num_iter = 10 * self.num_power_iter
 
-    def spectral_norm_parallel(self):
-        """ This method computes spectral normalization for all conv layers in parallel. This method should be called after calling the forward method of all the conv layers in each iteration. """
+    #             for j in range(num_iter):
+    #                 # Spectral norm of weight equals to `u^T W v`, where `u` and `v`
+    #                 # are the first left and right singular vectors.
+    #                 # This power iteration produces approximations of `u` and `v`.
+    #                 self.sr_v[i] = F.normalize(
+    #                     torch.matmul(self.sr_u[i].unsqueeze(1),
+    #                                  weights[i]).squeeze(1),
+    #                     dim=1,
+    #                     eps=1e-3)  # bx1xr * bxrxc --> bx1xc --> bxc
+    #                 self.sr_u[i] = F.normalize(
+    #                     torch.matmul(weights[i],
+    #                                  self.sr_v[i].unsqueeze(2)).squeeze(2),
+    #                     dim=1,
+    #                     eps=1e-3)  # bxrxc * bxcx1 --> bxrx1  --> bxr
 
-        weights = {}  # a dictionary indexed by the shape of weights
-        for l in self.all_conv_layers:
-            weight = l.weight_normalized
-            weight_mat = weight.view(weight.size(0), -1)
-            if weight_mat.shape not in weights:
-                weights[weight_mat.shape] = []
+    #         sigma = torch.matmul(
+    #             self.sr_u[i].unsqueeze(1),
+    #             torch.matmul(weights[i], self.sr_v[i].unsqueeze(2)))
+    #         loss += torch.sum(sigma)
+    #     return loss
 
-            weights[weight_mat.shape].append(weight_mat)
-
-        loss = 0
-        for i in weights:
-            weights[i] = torch.stack(weights[i], dim=0)
-            with torch.no_grad():
-                num_iter = self.num_power_iter
-                if i not in self.sr_u:
-                    num_w, row, col = weights[i].shape
-                    self.sr_u[i] = F.normalize(torch.ones(num_w, row).normal_(
-                        0, 1).cuda(),
-                                               dim=1,
-                                               eps=1e-3)
-                    self.sr_v[i] = F.normalize(torch.ones(num_w, col).normal_(
-                        0, 1).cuda(),
-                                               dim=1,
-                                               eps=1e-3)
-                    # increase the number of iterations for the first time
-                    num_iter = 10 * self.num_power_iter
-
-                for j in range(num_iter):
-                    # Spectral norm of weight equals to `u^T W v`, where `u` and `v`
-                    # are the first left and right singular vectors.
-                    # This power iteration produces approximations of `u` and `v`.
-                    self.sr_v[i] = F.normalize(
-                        torch.matmul(self.sr_u[i].unsqueeze(1),
-                                     weights[i]).squeeze(1),
-                        dim=1,
-                        eps=1e-3)  # bx1xr * bxrxc --> bx1xc --> bxc
-                    self.sr_u[i] = F.normalize(
-                        torch.matmul(weights[i],
-                                     self.sr_v[i].unsqueeze(2)).squeeze(2),
-                        dim=1,
-                        eps=1e-3)  # bxrxc * bxcx1 --> bxrx1  --> bxr
-
-            sigma = torch.matmul(
-                self.sr_u[i].unsqueeze(1),
-                torch.matmul(weights[i], self.sr_v[i].unsqueeze(2)))
-            loss += torch.sum(sigma)
-        return loss
-
-    def batchnorm_loss(self):
-        loss = 0
-        for l in self.all_bn_layers:
-            if l.affine:
-                loss += torch.max(torch.abs(l.weight))
-        return loss
+    # def batchnorm_loss(self):
+    #     loss = 0
+    #     for l in self.all_bn_layers:
+    #         if l.affine:
+    #             loss += torch.max(torch.abs(l.weight))
+    #     return loss
 
 
 def weights_init(m):
