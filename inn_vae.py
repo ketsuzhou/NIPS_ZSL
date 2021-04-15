@@ -9,12 +9,13 @@ from neural_ar_operations import ARConv2d
 from utils import get_stride_for_cell_type, get_input_size, groups_per_scale, get_arch_cells
 from distributions import Normal, DiscMixLogistic
 from inplaced_sync_batchnorm import SyncBatchNormSwish
-from inn_model import inn_classifier, inn_intervention
+from inn_classifier import inn_classifier, inn_intervention
 from models.flow.invertible_net import invertible_net
 import utils
 from models.flow.flowpp_coupling import GatedAttn
 import random
 from pl_bolts.models.self_supervised import CPCV2
+
 
 def cluster_distances(self, z, y=None):
 
@@ -32,7 +33,7 @@ def cluster_distances(self, z, y=None):
     return -2 * z_i_mu_j + z_i_z_i + mu_j_mu_j
 
 class inn_vae(nn.Module):
-    def __init__(self, args, arch_instance):
+    def __init__(self, args):
         super(inn_vae, self).__init__()
         self.in_shape = args.in_shape
         # encoder parameteres# each halfs the height and width
@@ -50,9 +51,6 @@ class inn_vae(nn.Module):
         # init decoder
         self.num_decoder = self.num_encoder
         self.decoder = self.init_decoder()
-
-        weight_path = 'https://pl-bolts-weights.s3.us-east-2.amazonaws.com/cpc/cpcv2_weights/checkpoints/epoch%3D526.ckpt'
-        self.backbone = CPCV2.load_from_checkpoint(weight_path, strict=False)
 
         # # collect all norm params in Conv2D and gamma param in batchnorm
         # self.all_log_norm = []
@@ -197,10 +195,7 @@ class inn_vae(nn.Module):
 
     def forward(self, inputs, label, num_train):
 
-        with torch.no_grad():
-            feature_map = self.backbone(inputs)
-
-        [batch_size, channels, height, weight] = feature_map.size()
+        [batch_size, channels, height, weight] = inputs.size()
         # perform encoder
         for encoder in self.encoder:
             inputs = encoder(inputs)
@@ -328,37 +323,37 @@ class inn_vae(nn.Module):
     #     return loss
 
 
-def weights_init(m):
-    classname = m.__class__.__name__
-    if classname.find('Linear') != -1:
-        m.bias.data.fill_(0)
-        nn.init.xavier_uniform_(m.weight, gain=0.5)
+# def weights_init(m):
+#     classname = m.__class__.__name__
+#     if classname.find('Linear') != -1:
+#         m.bias.data.fill_(0)
+#         nn.init.xavier_uniform_(m.weight, gain=0.5)
 
 
-class Attr_AutoEncoder(nn.Module):
-    def __init__(self, dim_attribute, dim_interme_layer, dim_latent_layer):
-        super(Attr_AutoEncoder, self).__init__()
-        self.dim_latent_layer = dim_latent_layer
-        self.encoder = nn.Sequential(
-            nn.Linear(dim_attribute, dim_interme_layer),
-            nn.ReLU(),
-            nn.Linear(dim_interme_layer, dim_latent_layer),
-            nn.ReLU(),
-            nn.Linear(dim_latent_layer, dim_latent_layer * 2),
-        )
-        self.apply(weights_init)
-        self.decoder = nn.Sequential(
-            nn.Linear(dim_latent_layer, dim_interme_layer), nn.ReLU(),
-            nn.Linear(dim_interme_layer, dim_attribute))
+# class Attr_AutoEncoder(nn.Module):
+#     def __init__(self, dim_attribute, dim_interme_layer, dim_latent_layer):
+#         super(Attr_AutoEncoder, self).__init__()
+#         self.dim_latent_layer = dim_latent_layer
+#         self.encoder = nn.Sequential(
+#             nn.Linear(dim_attribute, dim_interme_layer),
+#             nn.ReLU(),
+#             nn.Linear(dim_interme_layer, dim_latent_layer),
+#             nn.ReLU(),
+#             nn.Linear(dim_latent_layer, dim_latent_layer * 2),
+#         )
+#         self.apply(weights_init)
+#         self.decoder = nn.Sequential(
+#             nn.Linear(dim_latent_layer, dim_interme_layer), nn.ReLU(),
+#             nn.Linear(dim_interme_layer, dim_attribute))
 
-    def forward(self, x):
-        mu, log_sigma = torch.chunk(self.encoder(x), 2, dim=1)
-        dist = Normal(mu, log_sigma)
-        kl_loss = dist.kl(
-            Normal(
-                torch.zeros(self.dim_latent_layer).cuda(),
-                torch.ones(self.dim_latent_layer).cuda()))
-        reconstructed = self.decoder(dist.sample())
-        recon_loss = torch.abs(reconstructed, x)
+#     def forward(self, x):
+#         mu, log_sigma = torch.chunk(self.encoder(x), 2, dim=1)
+#         dist = Normal(mu, log_sigma)
+#         kl_loss = dist.kl(
+#             Normal(
+#                 torch.zeros(self.dim_latent_layer).cuda(),
+#                 torch.ones(self.dim_latent_layer).cuda()))
+#         reconstructed = self.decoder(dist.sample())
+#         recon_loss = torch.abs(reconstructed, x)
 
-        return recon_loss, kl_loss
+#         return recon_loss, kl_loss

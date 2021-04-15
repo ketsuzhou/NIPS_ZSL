@@ -47,16 +47,23 @@ import torchvision.datasets as datasets
 import torch.nn.functional as F
 from os import path
 import logging
+from discriminative_classifier import att_classifier
 from trainers import linear_classifier_trainer
+from utils_new import create_filename, create_modelname, config_process, fix_act_norm_issue
+import copy
+from inn_vae import inn_vae
+from training import callbacks
+logger = logging.getLogger(__name__)
 
 
 def arg_parse():
-    parser = argparse.ArgumentParser(description='Flow++ on CIFAR-10')
+    parser = argparse.ArgumentParser(description='ZSL')
 
     parser.add_argument('--cfg_file',
                         type=str,
                         dest='cfg_file',
                         default='configs/ResNet101_AwA2_SS_C.yaml')
+
     # data loader params
     parser.add_argument('--data_root',
                         default='../../../media/data/',
@@ -94,6 +101,19 @@ def arg_parse():
                         action='store_true',
                         default=False,
                         help='use pre-extracted feature')
+    parser.add_argument("--debug",
+                        action="store_true",
+                        default=True,
+                        help="Debug mode (more log output, additional callbacks)")
+    parser.add_argument("--pretraining_attented_classifier",
+                        action="store_true",
+                        default=True)
+    parser.add_argument("--pretraining_inn_vae",
+                        action="store_true",
+                        default=False)
+    parser.add_argument("--sequential_training",
+                        action="store_true",
+                        default=False)
 
     # Flow params
     parser.add_argument('--num_channels',
@@ -130,25 +150,26 @@ def arg_parse():
                         type=float,
                         default=3e-4,
                         help='weight decay')
-    parser.add_argument(
-        '--weight_decay_norm',
-        type=float,
-        default=0.,
-        help='The lambda parameter for spectral regularization.')
+    parser.add_argument('--weight_decay_norm',
+                        type=float,
+                        default=0.,
+                        help='The lambda parameter for spectral regularization.')
     parser.add_argument('--weight_decay_norm_init',
                         type=float,
                         default=10.,
                         help='The initial lambda parameter')
-    parser.add_argument(
-        '--weight_decay_norm_anneal',
-        action='store_true',
-        default=False,
-        help='This flag enables annealing the lambda coefficient from '
-        '--weight_decay_norm_init to --weight_decay_norm.')
+    parser.add_argument('--weight_decay_norm_anneal',
+                        action='store_true',
+                        default=False,
+                        help='This flag enables annealing the lambda coefficient from '
+                        '--weight_decay_norm_init to --weight_decay_norm.')
     parser.add_argument('--epochs',
                         type=int,
                         default=200,
                         help='num of training epochs')
+    parser.add_argument("--startepoch",
+                        type=int, default=0,
+                        help="Sets the first trained epoch for resuming partial training")
     parser.add_argument('--warmup_epochs',
                         type=int,
                         default=5,
@@ -186,34 +207,9 @@ def arg_parse():
                         default='samples',
                         help='Directory for saving samples')
 
-    parser.add_argument('--class_embedding', default='att', type=str)
-
-    # DDP.
-    parser.add_argument('--node_rank',
-                        type=int,
-                        default=0,
-                        help='The index of node.')
-    parser.add_argument('--num_proc_node',
-                        type=int,
-                        default=1,
-                        help='The number of nodes in multi node env.每台机器进程数')
-    parser.add_argument('--local_rank',
-                        type=int,
-                        default=0,
-                        help='rank of process in the node, 每台机子上使用的GPU的序号')
-    parser.add_argument('--global_rank',
-                        type=int,
-                        default=0,
-                        help='rank of process among all the processes')
-    parser.add_argument('--num_process_per_node',
-                        type=int,
-                        default=1,
-                        help='number of gpus')
-    parser.add_argument(
-        '--master_address',
-        type=str,
-        default='127.0.0.1',
-        help='address for master, master节点相当于参数服务器，其会向其他卡广播其参数,rank=0的进程就是master进程')
+    parser.add_argument('--class_embedding',
+                        default='att',
+                        type=str)
 
     args = parser.parse_args()
     args.save = args.result_root + '/eval-' + args.save
@@ -222,218 +218,87 @@ def arg_parse():
     return args
 
 
-def config_process(config):
-    if not os.path.isfile(config.cfg_file):
-        raise FileNotFoundError()
-    f = open(config.cfg_file, 'r', encoding='utf-8')
-    cfg = yaml.load(f.read())
+def read_attribute():
+    class_path = './AWA2_attribute.pkl'
+    with open(class_path, 'rb') as f:
+        w2v = pickle.load(f)
 
-    config = vars(config)
-    config = {**config, **cfg}
-    config = argparse.Namespace(**config)
-    config = dict2obj(config)
-    config.FlowBlocks_architecture = eval(config.FlowBlocks_architecture)
-    config.use_attn = eval(config.use_attn)
-    config.use_split = eval(config.use_split)
-    config.downsample = eval(config.downsample)
-    config.in_shape = [2048, 7, 7]
+    w2v = torch.tensor(w2v).float()
+    U, s, V = torch.svd(w2v)
+    # reconstruct = torch.mm(torch.mm(U,torch.diag(s)),torch.transpose(V,1,0))
 
-    if not os.path.exists(config.result_root):
-        os.makedirs(config.result_root)
-    # if not os.path.exists(config.model_root):
-    # os.makedirs(config.model_root)
-    # namespace ==> dictionary
-    return config
+    w2v_att = torch.transpose(V, 1, 0)
+    att = torch.mm(U, torch.diag(s))
+    normalize_att = torch.mm(U, torch.diag(s))
+    dim_v = V.size(1)
+
+    return dim_v, w2v_att, att, normalize_att
 
 
-def init_processes(rank, size, fn, args):
-    """ Initialize the distributed environment. """
-    os.environ['MASTER_ADDR'] = args.master_address
-    os.environ['MASTER_PORT'] = '6020'
-    torch.cuda.set_device(args.local_rank)
-    dist.init_process_group(backend='nccl',
-                            init_method='env://',
-                            rank=rank,
-                            world_size=size)
-    fn(args)
-    dist.destroy_process_group()
+def load_or_resume(args, model, resume=None, load=None):
+    create_modelname(args)
 
-
-if __name__ == '__main__':
-    args = arg_parse()
-    size = args.num_process_per_node
-    if size > 1:
-        args.distributed = True
-        processes = []
-        for rank in range(size):
-            args.local_rank = rank
-            global_rank = rank + args.node_rank * args.num_process_per_node
-            global_size = args.num_proc_node * args.num_process_per_node
-            args.global_rank = global_rank
-            print('Node rank %d, local proc %d, global proc %d' %
-                  (args.node_rank, rank, global_rank))
-            p = Process(target=init_processes,
-                        args=(global_rank, global_size, train_test, args))
-            p.start()
-            processes.append(p)
-
-        for p in processes:
-            p.join()
+    # Maybe load pretrained model
+    if resume:
+        resume_filename = create_filename("resume", None, args)
+        args.startepoch = args.resume
+        logger.info("Resuming training. Loading file %s and continuing with epoch %s.",
+                    resume_filename, args.resume + 1)
+        model.load_state_dict(torch.load(
+            resume_filename, map_location=torch.device("cpu")))
+        fix_act_norm_issue(model)
+    elif load:
+        args_ = copy.deepcopy(args)
+        args_.modelname = args.load
+        if args_.i > 0:
+            args_.modelname += "_run{}".format(args_.i)
+        logger.info("Loading model %s and training it as %s with algorithm %s on data set %s",
+                    args.load, args.modelname, args.algorithm, args.dataset)
+        model.load_state_dict(torch.load(create_filename(
+            "model", None, args_), map_location=torch.device("cpu")))
+        fix_act_norm_issue(model)
     else:
-        # for debugging
-        print('starting in debug mode')
-        args.distributed = True
-        init_processes(0, size, train_test, args)
+        logger.info("Training from scratch the model %s with algorithm %s on data set %s",
+                    args.modelname, args.algorithm, args.dataset)
+
+    return model
 
 
-class WrappedModel(nn.Module):
-    def __init__(self, module):
-        super(WrappedModel, self).__init__()
-        self.module = module
+def pretraining_att_classifier(args, model):
 
-    def forward(self, x):
-        return self.module(x)
+    linear_classifier_trainer = linear_classifier_trainer(attented_classifier)
 
-
-def save_pickle(file, data):
-    with open(file, 'wb') as f:
-        pickle.dump(data, f)
-
-
-def load_pickle(file):
-    with open(file, 'rb') as f:
-        return pickle.load(f)
-
-
-def extract_feature(val_loader, model, checkpoint_dir, tag='last', set='base'):
-    save_dir = '{}/{}'.format(checkpoint_dir, tag)
-    if os.path.isfile(save_dir + '/%s_features.plk' % set):
-        data = load_pickle(save_dir + '/%s_features.plk' % set)
-        return data
-    else:
-        if not os.path.isdir(save_dir):
-            os.makedirs(save_dir)
-
-    # model.eval()
-    with torch.no_grad():
-
-        output_dict = collections.defaultdict(list)
-
-        for i, (inputs, labels) in enumerate(val_loader):
-            # compute output
-            inputs = inputs.cuda()
-            labels = labels.cuda()
-            outputs, _ = model(inputs)
-            outputs = outputs.cpu().data.numpy()
-
-            for out, label in zip(outputs, labels):
-                output_dict[label.item()].append(out)
-
-        all_info = output_dict
-        save_pickle(save_dir + '/%s_features.plk' % set, all_info)
-        return all_info
-
-
-class linear_classifier(nn.Module):
-    def __init__(self, num_attributes):
-        weight_path = 'https://pl-bolts-weights.s3.us-east-2.amazonaws.com/cpc/cpcv2_weights/checkpoints/epoch%3D526.ckpt'
-        self.backbone = CPCV2.load_from_checkpoint(weight_path, strict=False)
-
-        self.num_attributes = num_attributes
-        self.W_1 = nn.Parameter(nn.init.normal_(
-            torch.empty(self.dim_v, self.dim_f)), requires_grad=True)
-
-    def compute_V(self):
-        if self.normalize_V:
-            V_n = F.normalize(self.V)
-        else:
-            V_n = self.V
-        return V_n
-
-    def forward(self, inputs):
-        with torch.no_grad():
-            feature_map = self.backbone(inputs)
-
-        shape = feature_map.shape
-        Fm = feature_map.reshape(shape[0], shape[1], -1)
-
-        B = Fm.size(0)  # batch
-        I = Fm.size(0)  # class
-        R = Fm.size(2)  # region
-
-        V_n = self.compute_V()
-
-        if self.normalize_F and not self.is_conv:
-            Fm = F.normalize(Fm, dim=1)
-
-        # Compute attribute score on each image region
-        patchwise_attribute_score = torch.einsum(
-            'iv, vf, bfr -> bir', V_n, self.W_1, Fm)
-
-        # we use a sigmoid function for each attribute individually, which allows to select multiple attributes with weights close to one, and set the weight for the remaining attributes to be close to zero.
-        if self.is_sigmoid:
-            patchwise_attribute_score = torch.sigmoid(
-                patchwise_attribute_score)
-
-        # compute attention maps over patches
-        attention_over_patches = torch.einsum(
-            'iv, vf, bfr -> bir', V_n, self.W_2, Fm)
-        # performing softmax at meanwhile causes there is no attention over attributes
-        attention_over_patches = F.softmax(attention_over_patches, dim=-1)
-
-        # compute attribute-attented feature map
-        attented_patch = torch.einsum(
-            'bir, bfr -> bif', attention_over_patches, Fm)
-
-        # compute attention over attributes
-        attention_over_attributes = torch.einsum(
-            'iv, vf, bif -> bi', V_n, self.W_3, attented_patch)
-        attention_over_attributes = torch.sigmoid(attention_over_attributes)
-
-        # compute attribute scores from attribute attention maps
-        # todo connect to attribute change in inn
-        attented_attribute_score = torch.einsum(
-            'bir, bir -> bi', attention_over_patches, patchwise_attribute_score)
-
-        if self.non_linear_act:
-            attented_attribute_score = F.relu(attented_attribute_score)
-
-        # compute the final prediction as the product of semantic scores, attribute scores, and attention over attribute scores
-        S_pp = torch.einsum('ki, bi, bi -> bik', self.att,
-                            attention_over_attributes, attented_attribute_score)
-
-        if self.non_linear_emb:
-            S_pp = torch.transpose(S_pp, 2, 1)  # [bki] <== [bik]
-            S_pp = self.emb_func(S_pp)  # [bk1] <== [bki]
-            S_pp = S_pp[:, :, 0]  # [bk] <== [bk1]
-        else:
-            S_pp = torch.sum(S_pp, axis=1)  # [bk] <== [bik]
-
-        # augment prediction scores by adding a margin of 1 to unseen classes and -1 to seen classes
-        if self.is_bias:
-            self.vec_bias = self.mask_bias*self.bias
-            S_pp = S_pp + self.vec_bias
-
-        # spatial attention supervision
-        Predicted_att = torch.einsum(
-            'iv, vf, bif -> bi', V_n, self.W_1, attented_patch)
-
-        return feature_map, logits
-
-
-def extractor():
-    args = arg_parse()
-    linear_classifier = linear_classifier()
-
-    common_kwargs, scandal_loss, scandal_label, scandal_weight = \
-        make_training_kwargs(args, dataset)
-
-    linear_classifier_trainer = linear_classifier_trainer(linear_classifier)
-
-    output_dict = collections.defaultdict(list)
+    common_kwargs = make_training_kwargs(args)
     # logger.info("Starting training MF with specified manifold on NLL")
     learning_curves = linear_classifier_trainer.train(
-        loss_functions=[mse, nll],
+        epochs=args.epochs,
+        callbacks=[callbacks.save_model_after_every_epoch(
+            create_filename("checkpoint", None, args))],
+        forward_kwargs={"mode": "mf"},
+        custom_kwargs={"save_output": True},
+        initial_epoch=args.startepoch,
+        **common_kwargs,
+    )
+    logger.info("Saving model")
+    torch.save(model.state_dict(), create_filename("model", None, args))
+
+    learning_curves = np.vstack(learning_curves).T
+
+
+def pretraining_inn_vae(args, dataset, model, simulator):
+    args = arg_parse()
+
+    dim_v, w2v_att, att, normalize_att = read_attribute()
+
+    attented_classifier = attented_classifier(
+        dim_v, w2v_att, att, normalize_att, trainable_w2v=False, non_linear_act=False, normalize_V=False, normalize_F=False)
+
+    common_kwargs = make_training_kwargs(args)
+
+    linear_classifier_trainer = linear_classifier_trainer(attented_classifier)
+
+    # logger.info("Starting training MF with specified manifold on NLL")
+    learning_curves = linear_classifier_trainer.train(
         loss_labels=["MSE", "NLL"] + scandal_label,
         loss_weights=None,
         epochs=args.epochs,
@@ -445,3 +310,97 @@ def extractor():
         **common_kwargs,
     )
     learning_curves = np.vstack(learning_curves).T
+
+
+def sequential_training(args, dataset, model, simulator):
+    args = arg_parse()
+
+    dim_v, w2v_att, att, normalize_att = read_attribute()
+
+    attented_classifier = attented_classifier(
+        dim_v, w2v_att, att, normalize_att, trainable_w2v=False, non_linear_act=False, normalize_V=False, normalize_F=False)
+
+    common_kwargs = make_training_kwargs(args)
+
+    linear_classifier_trainer = linear_classifier_trainer(attented_classifier)
+
+    # logger.info("Starting training MF with specified manifold on NLL")
+    learning_curves = linear_classifier_trainer.train(
+        loss_labels=["MSE", "NLL"] + scandal_label,
+        loss_weights=None,
+        epochs=args.epochs,
+        callbacks=[callbacks.save_model_after_every_epoch(
+            create_filename("checkpoint", None, args))],
+        forward_kwargs={"mode": "mf"},
+        custom_kwargs={"save_output": True},
+        initial_epoch=args.startepoch,
+        **common_kwargs,
+    )
+    learning_curves = np.vstack(learning_curves).T
+
+
+def create_attented_classifier(args):
+    dim_v, w2v_att, att, normalize_att = read_attribute()
+
+    attented_classifier = att_classifier(
+        dim_v, w2v_att, att, normalize_att, trainable_w2v=False, non_linear_act=False, normalize_V=False, normalize_F=False)
+
+    attented_classifier = load_or_resume(
+        args, att_classifier, args.resume_attented_classifier, args.load_attented_classifier)
+
+    return attented_classifier
+
+
+def create_inn_vae():
+    inn_vae = inn_vae(args)
+    inn_vae = load_or_resume(
+        args, inn_vae, args.resume_inn_vae, args.load_inn_vae)
+
+    return inn_vae
+
+
+if __name__ == "__main__":
+    # Logger
+    args = arg_parse()
+    logging.basicConfig(format="%(asctime)-5.5s %(name)-20.20s %(levelname)-7.7s %(message)s",
+                        datefmt="%H:%M", level=logging.DEBUG if args.debug else logging.INFO)
+    logger.info("Hi!")
+    logger.debug("Starting train.py with arguments %s", args)
+
+    # Bug fix related to some num_workers > 1 and CUDA. Bad things happen otherwise!
+    torch.multiprocessing.set_start_method("spawn", force=True)
+
+    if args.pretraining_attented_classifier == True:
+        attented_classifier = create_attented_classifier(args)
+        learning_curves = pretraining_attented_classifier(attented_classifier)
+
+    elif args.pretraining_inn_vae == True:
+        inn_vae = create_inn_vae()
+        learning_curves = pretraining_inn_vae(inn_vae)
+
+    elif args.sequential_training == True:
+        attented_classifier = create_attented_classifier(args)
+        inn_vae = create_inn_vae()
+        learning_curves = sequential_training(attented_classifier, inn_vae)
+
+    # Save
+
+    np.save(create_filename("learning_curve", None, args), learning_curves)
+
+    logger.info("All done! Have a nice day!")
+
+
+def make_training_kwargs(args):
+    kwargs = {
+        "dataset": args.dataset,
+        "batch_size": args.batchsize,
+        "initial_lr": args.lr,
+        "scheduler": optim.lr_scheduler.CosineAnnealingLR,
+        "clip_gradient": args.clip,
+        "validation_split": args.validationsplit,
+        "seed": args.seed + args.i,
+    }
+    if args.weightdecay is not None:
+        kwargs["optimizer_kwargs"] = {"weight_decay": float(args.weightdecay)}
+
+    return kwargs

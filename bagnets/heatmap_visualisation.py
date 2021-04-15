@@ -7,6 +7,7 @@ import bagnets.pytorchnet
 from bagnets.utils import plot_heatmap, generate_heatmap_pytorch
 from IPython import get_ipython
 import numpy as np
+import torch
 # %%
 # get_ipython().magic('pylab inline')
 
@@ -20,11 +21,14 @@ pytorch_model.eval()
 # %%
 # load an imagenet sample
 # we use foolbox for simplicity here
-original, label = samples(dataset='imagenet', index=1, batchsize=1, shape=(
-    224, 224), data_format='channels_first')
+# original, label = samples(dataset='imagenet', index=1, batchsize=1, shape=(
+#     224, 224), data_format='channels_first')
 
+original = torch.rand(1, 3, 224, 224)
+label = torch.zeros(1, 1000)
+label = label.scatter_(dim=1, index=torch.tensor([[1]]), value=1)
 # preprocess sample image
-sample = original / 255.
+sample = original
 sample -= np.array([0.485, 0.456, 0.406])[:, None, None]
 sample /= np.array([0.229, 0.224, 0.225])[:, None, None]
 

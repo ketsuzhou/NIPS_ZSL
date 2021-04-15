@@ -22,7 +22,7 @@ from models.flow.invertible_net import *
 from tqdm import tqdm
 import yaml
 from configs.default import cfg, update_datasets
-from inn_model import inn_classifier
+from inn_classifier import inn_classifier
 from data_module import data_module
 from data_factory.dataloader import IMAGE_LOADOR
 from pl_bolts.models.self_supervised import CPCV2, SSLFineTuner

@@ -6,47 +6,7 @@ from torch.autograd import grad
 from torch.utils.data import DataLoader
 from torch.utils.data.sampler import SubsetRandomSampler
 from torch.nn.utils import clip_grad_norm_
-import torchvision.models as models
-logger = logging.getLogger(__name__)
-from data_module import data_module
-import matplotlib.pyplot as plt
-from bagnets.utils import plot_heatmap, generate_heatmap_pytorch
-import bagnets.pytorchnet
-import argparse
-import numpy as np
-import os
-import random
-import torch
-import torch.optim as optim
-import torch.optim.lr_scheduler as sched
-import torch.backends.cudnn as cudnn
-import torch.utils.data as data
-import torchvision
-import torchvision.models as models
-import torchvision.transforms as transforms
-from torch.utils.data import DataLoader
-import util
-from data_factory.dataloader import *
-from arg_completion import *
-from data_factory.data_transform import TrainTransforms
-from models.flow.invertible_net import *
-from tqdm import tqdm
-import yaml
-from configs.default import cfg, update_datasets
-from inn_model import inn_classifier
-from data_module import data_module
-from data_factory.dataloader import IMAGE_LOADOR
-from pl_bolts.models.self_supervised import CPCV2, SSLFineTuner
-from pytorch_lightning import Trainer
-import pytorch_lightning as pl
-import utils
-from torch.multiprocessing import Process
-import torch.distributed as dist
-from inn_vae import inn_vae
-from adamax import Adamax
-from torch.cuda.amp import autocast, GradScaler
-from init_saving import create_filename
-import logging
+
 logger = logging.getLogger(__name__)
 
 
@@ -77,12 +37,6 @@ class BaseTrainer(object):
             torch.set_default_tensor_type("torch.DoubleTensor")
         else:
             torch.set_default_tensor_type("torch.FloatTensor")
-
-        if args.backbone == 'resnet101':
-            self.backbone = models.__dict__['resnet101'](pretrained=True).to(self.device, self.dtype)
-        else:
-            weight_path = 'https://pl-bolts-weights.s3.us-east-2.amazonaws.com/cpc/cpcv2_weights/checkpoints/epoch%3D526.ckpt'
-            self.backbone = CPCV2.load_from_checkpoint(weight_path, strict=False).to(self.device, self.dtype)
 
         self.model = self.model.to(self.device, self.dtype)
         self.last_batch = None
@@ -221,7 +175,7 @@ class BaseTrainer(object):
             )
 
         return train_loader, val_loader
-    
+
     @staticmethod
     def sum_losses(contributions, weights):
         loss = weights[0] * contributions[0]
@@ -297,26 +251,17 @@ class Trainer(BaseTrainer):
         if seed is not None:
             np.random.seed(seed)
             torch.manual_seed(seed)
-            torch.cuda.manual_seed(seed)
-            torch.cuda.manual_seed_all(seed)
 
         logger.debug("Initialising training data")
-        # train_loader, val_loader = self.make_dataloader(
-        #     dataset, validation_split, batch_size)
-        dm = data_module(args)
-        if args.zsl_type == "conventional":
-            train_loader, val_loader = dm.conventional_dataloader()
-        elif args.zsl_type == "generalized":
-            train_loader, val_loader = dm.generalized_dataloader()
-        else:
-            NotImplementedError
+        train_loader, val_loader = self.make_dataloader(
+            dataset, validation_split, batch_size)
 
         logger.debug("Setting up optimizer")
         optimizer_kwargs = {} if optimizer_kwargs is None else optimizer_kwargs
         if parameters is None:
             parameters = list(self.model.parameters())
         opt = optimizer(parameters, lr=initial_lr, **optimizer_kwargs)
-    
+
         logger.debug("Setting up LR scheduler")
         if epochs < 2:
             scheduler = None
@@ -519,7 +464,7 @@ class Trainer(BaseTrainer):
         forward_kwargs=None,
         custom_kwargs=None,
         compute_loss_variance=False,
-        ):
+    ):
         if compute_loss_variance:
             raise NotImplementedError
 
@@ -644,6 +589,7 @@ class Trainer(BaseTrainer):
 
 class ForwardTrainer(Trainer):
     """ Trainer for likelihood-based flow training when the model is not conditional. """
+
     def first_batch(self, batch_data):
         if self.multi_gpu:
             x, y = batch_data
@@ -668,16 +614,6 @@ class ForwardTrainer(Trainer):
                 self.model, x, module_kwargs=forward_kwargs)
         else:
             results = self.model(x, **forward_kwargs)
-
-        if intervention_inn == 'semantic_patch':
-            intervention_loss = self.intervention_on_patch(label, intervented_patches, embedings_after_intervention)
-        
-        if intervention_vae == 'semantic_attributes':
-            
-        elif intervention_vae == 'semantic_nondiscriminative':
-            pass
-        elif intervention_vae == 'nondiscriminative':
-            pass
 
         if len(results) == 4:
             x_reco, log_prob, u, hidden = results
@@ -795,3 +731,234 @@ class SCANDALForwardTrainer(Trainer):
 
         return losses
 
+
+class AdversarialTrainer(Trainer):
+    """ Trainer for adversarial (OT) flow training when the model is not conditional. """
+
+    # TODO: multi-GPU support
+    def forward_pass(self, batch_data, loss_functions, forward_kwargs=None, custom_kwargs=None):
+        if forward_kwargs is None:
+            forward_kwargs = {}
+
+        x = batch_data[0]
+        batch_size = x.size(0)
+
+        if len(x.size()) < 2:
+            x = x.view(batch_size, -1)
+        x = x.to(self.device, self.dtype)
+        self._check_for_nans("Training data", x)
+
+        x_gen = self.model.sample(n=batch_size, **forward_kwargs)
+        self._check_for_nans("Generated data", x_gen)
+
+        losses = [loss_fn(x_gen, x, None) for loss_fn in loss_functions]
+        self._check_for_nans("Loss", *losses)
+
+        return losses
+
+
+class ConditionalAdversarialTrainer(AdversarialTrainer):
+    """ Trainer for adversarial (OT) flow training and conditional models. """
+
+    # TODO: multi-GPU support
+    def forward_pass(self, batch_data, loss_functions, forward_kwargs=None, custom_kwargs=None):
+        if forward_kwargs is None:
+            forward_kwargs = {}
+
+        x = batch_data[0]
+        params = batch_data[1]
+        batch_size = x.size(0)
+
+        if len(x.size()) < 2:
+            x = x.view(batch_size, -1)
+        if len(params.size()) < 2:
+            params = params.view(batch_size, -1)
+        self._check_for_nans("Training data", x, params)
+
+        x = x.to(self.device, self.dtype)
+        params = params.to(self.device, self.dtype)
+
+        x_gen = self.model.sample(
+            n=batch_size, context=params, **forward_kwargs)
+        self._check_for_nans("Generated data", x_gen)
+
+        losses = [loss_fn(x_gen, x, None) for loss_fn in loss_functions]
+        self._check_for_nans("Loss", *losses)
+
+        return losses
+
+
+# class VarDimForwardTrainer(ForwardTrainer):
+#     """ Trainer for likelihood-based flow training for PIE with variable epsilons and non-conditional models. """
+#
+#     def train(
+#         self,
+#         dataset,
+#         loss_functions,
+#         loss_weights=None,
+#         loss_labels=None,
+#         epochs=50,
+#         batch_size=100,
+#         optimizer=optim.Adam,
+#         optimizer_kwargs=None,
+#         initial_lr=1.0e-3,
+#         scheduler=optim.lr_scheduler.CosineAnnealingLR,
+#         scheduler_kwargs=None,
+#         restart_scheduler=None,
+#         validation_split=0.25,
+#         early_stopping=True,
+#         early_stopping_patience=None,
+#         clip_gradient=1.0,
+#         verbose="some",
+#         parameters=None,
+#         callbacks=None,
+#         forward_kwargs=None,
+#         custom_kwargs=None,
+#         compute_loss_variance=False,
+#         l1=0.0,
+#         l2=0.0,
+#     ):
+#         # Prepare inputs
+#         if custom_kwargs is None:
+#             custom_kwargs = dict()
+#         if l1 is not None:
+#             custom_kwargs["l1"] = l1
+#         if l2 is not None:
+#             custom_kwargs["l2"] = l2
+#
+#         n_losses = len(loss_functions) + 1
+#         if loss_labels is None:
+#             loss_labels = [fn.__name__ for fn in loss_functions]
+#         loss_labels.append("Regularizer")
+#         loss_weights = [1.0] * n_losses if loss_weights is None else loss_weights + [1.0]
+#
+#         return super().train(
+#             dataset,
+#             loss_functions,
+#             loss_weights,
+#             loss_labels,
+#             epochs,
+#             batch_size,
+#             optimizer,
+#             optimizer_kwargs,
+#             initial_lr,
+#             scheduler,
+#             scheduler_kwargs,
+#             restart_scheduler,
+#             validation_split,
+#             early_stopping,
+#             early_stopping_patience,
+#             clip_gradient,
+#             verbose,
+#             parameters,
+#             callbacks,
+#             forward_kwargs,
+#             custom_kwargs,
+#             compute_loss_variance=compute_loss_variance,
+#         )
+#
+#     def forward_pass(self, batch_data, loss_functions, forward_kwargs=None, custom_kwargs=None):
+#         losses = super().forward_pass(batch_data, loss_functions, forward_kwargs)
+#
+#         if custom_kwargs is not None:
+#             l1 = custom_kwargs.get("l1", 0.0)
+#             l2 = custom_kwargs.get("l2", 0.0)
+#             reg = self.model.latent_regularizer(l1, l2)
+#             losses.append(reg)
+#
+#         return losses
+#
+#     def report_epoch(self, i_epoch, loss_labels, loss_train, loss_val, loss_contributions_train, loss_contributions_val, verbose=False):
+#         logging_fn = logger.info if verbose else logger.debug
+#         super().report_epoch(i_epoch, loss_labels, loss_train, loss_val, loss_contributions_train, loss_contributions_val, verbose)
+#
+#         logging_fn("           latent dim {:>8d}".format(self.model.calculate_latent_dim()))
+#         logger.debug("           stds        {}".format(self.model.latent_stds().detach().numpy()))
+#
+#
+# class ConditionalVarDimForwardTrainer(ConditionalForwardTrainer):
+#     """ Trainer for likelihood-based flow training for PIE with variable epsilons and conditional models. """
+#
+#     def train(
+#         self,
+#         dataset,
+#         loss_functions,
+#         loss_weights=None,
+#         loss_labels=None,
+#         epochs=50,
+#         batch_size=100,
+#         optimizer=optim.Adam,
+#         optimizer_kwargs=None,
+#         initial_lr=1.0e-3,
+#         scheduler=optim.lr_scheduler.CosineAnnealingLR,
+#         scheduler_kwargs=None,
+#         restart_scheduler=None,
+#         validation_split=0.25,
+#         early_stopping=True,
+#         early_stopping_patience=None,
+#         clip_gradient=1.0,
+#         verbose="some",
+#         parameters=None,
+#         callbacks=None,
+#         forward_kwargs=None,
+#         custom_kwargs=None,
+#         compute_loss_variance=False,
+#         l1=0.0,
+#         l2=0.0,
+#     ):
+#         # Prepare inputs
+#         if custom_kwargs is None:
+#             custom_kwargs = dict()
+#         if l1 is not None:
+#             custom_kwargs["l1"] = l1
+#         if l2 is not None:
+#             custom_kwargs["l2"] = l2
+#
+#         n_losses = len(loss_functions) + 1
+#         if loss_labels is None:
+#             loss_labels = [fn.__name__ for fn in loss_functions]
+#         loss_labels.append("Regularizer")
+#         loss_weights = [1.0] * n_losses if loss_weights is None else loss_weights + [1.0]
+#
+#         return super().train(
+#             dataset,
+#             loss_functions,
+#             loss_weights,
+#             loss_labels,
+#             epochs,
+#             batch_size,
+#             optimizer,
+#             optimizer_kwargs,
+#             initial_lr,
+#             scheduler,
+#             scheduler_kwargs,
+#             restart_scheduler,
+#             validation_split,
+#             early_stopping,
+#             early_stopping_patience,
+#             clip_gradient,
+#             verbose,
+#             parameters,
+#             callbacks,
+#             forward_kwargs,
+#             custom_kwargs,
+#             compute_loss_variance=compute_loss_variance,
+#         )
+#
+#     def forward_pass(self, batch_data, loss_functions, forward_kwargs=None, custom_kwargs=None):
+#         losses = super().forward_pass(batch_data, loss_functions, forward_kwargs)
+#
+#         if custom_kwargs is not None:
+#             l1 = custom_kwargs.get("l1", 0.0)
+#             l2 = custom_kwargs.get("l2", 0.0)
+#             reg = self.model.latent_regularizer(l1, l2)
+#             losses.append(reg)
+#
+#         return losses
+#
+#     def report_epoch(self, i_epoch, loss_labels, loss_train, loss_val, loss_contributions_train, loss_contributions_val, verbose=False):
+#         logging_fn = logger.info if verbose else logger.debug
+#         super().report_epoch(i_epoch, loss_labels, loss_train, loss_val, loss_contributions_train, loss_contributions_val, verbose)
+#
+#         logging_fn("           latent dim {:>8d}".format(self.model.calculate_latent_dim()))
+#         logger.debug("           stds        {}".format(self.model.latent_stds().detach().numpy()))

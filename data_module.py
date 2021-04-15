@@ -98,6 +98,7 @@ def split_byclass(seen_classes, unseen_classes, all_data_path, labels,
 
 class DataSet(data.Dataset):
     'Characterizes a dataset for PyTorch'
+
     def __init__(self, image_dir, data_path, labels, transform):
         'Initialization'
         self.labels = labels
@@ -142,38 +143,51 @@ class data_module():
             args.data_root, args.dataset, 'JPEGImages/')
         class_file = os.path.join(args.data_root, args.dataset, 'classes.txt')
         image_path2label = os.path.join(args.data_root, args.dataset,
-                                   'image_labels.txt')
-        binary_attributes_file = os.path.join(args.data_root, args.dataset,
+                                        'image_labels.txt')
+        binary_class_attributes_file = os.path.join(args.data_root, args.dataset,
                                               'predicate-matrix-binary.txt')
-        continuous_attributes_file = os.path.join(args.data_root, args.dataset,
+        continuous_class_attributes_file = os.path.join(args.data_root, args.dataset,
                                                   'predicate-matrix-continuous.txt')
-        self.continuous_attributes = read_attribute(continuous_attributes_file)
-        self.binary_attributes = read_attribute(binary_attributes_file)
-        self.num_classes = len(self.binary_attributes)
-        self.binary_attributes = torch.tensor(self.binary_attributes)
+        self.continuous_class_attributes = read_attribute(continuous_class_attributes_file)
+        self.binary_class_attributes = read_attribute(binary_class_attributes_file)
+        self.num_classes = len(self.binary_class_attributes)
+        self.binary_class_attributes = torch.tensor(self.binary_class_attributes)
 
-        # matcontent = sio.loadmat(
-        #     args.data_root + "/" + args.dataset + "/" + "att_splits.mat")
-        # self.attribute = torch.from_numpy(matcontent['att'].T).float()
+################################################################
 
+        # class_path = './AWA2_attribute.pkl'
+        # with open(class_path, 'rb') as f:
+        #     w2v = pickle.load(f)
+
+        # w2v = torch.tensor(w2v)
+        # self.normalized_w2v = normalization(w2v).to(torch.float32)
+
+        # self.class_embedings = torch.einsum(
+        #     'ca, ad -> cd', self.binary_attributes, self.normalized_w2v)
+
+        # embedings_after_intervention = {}
+        # for i in range(len(self.binary_attributes)):
+        #     index = (self.binary_attributes[i] == 1).nonzero().squeeze(1)
+        #     embedings_after_intervention[f'intervention_for_class_{i}'] = \
+        #         self.class_embedings[i] - self.normalized_w2v[index]
+
+        # self.embedings_after_intervention = embedings_after_intervention
+
+################################################################
         class_path = './AWA2_attribute.pkl'
         with open(class_path, 'rb') as f:
             w2v = pickle.load(f)
 
-        w2v = torch.tensor(w2v)
-        self.normalized_w2v = normalization(w2v).to(torch.float32)
+        w2v = torch.tensor(w2v).float()
+        U, s, V = torch.svd(w2v)
+        # reconstruct = torch.mm(torch.mm(U,torch.diag(s)),torch.transpose(V,1,0))
 
-        self.class_embedings = torch.einsum(
-            'ca, ad -> cd', self.binary_attributes, self.normalized_w2v)
+        self.w2v_att = torch.transpose(V, 1, 0)
+        self.att = torch.mm(U, torch.diag(s))
+        self.normalize_att = torch.mm(U, torch.diag(s))
 
-        embedings_after_intervention = {}
-        for i in range(len(self.binary_attributes)):
-            index = (self.binary_attributes[i] == 1).nonzero().squeeze(1)
-            embedings_after_intervention[f'intervention_for_class_{i}'] = \
-                self.class_embedings[i] - self.normalized_w2v[index]
+################################################################
 
-        self.embedings_after_intervention = embedings_after_intervention
-        
         self.all_data_path, self.all_data_labels, self.name2label = image_load(
             class_file, image_path2label)
 

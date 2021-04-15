@@ -9,7 +9,7 @@ import utils
 import pytorch_lightning as pl
 from pytorch_lightning import Trainer
 from data_factory.dataloader import IMAGE_LOADOR
-from inn_model import inn_classifier
+from inn_classifier import inn_classifier
 from configs.default import cfg, update_datasets
 import yaml
 from tqdm import tqdm
@@ -83,7 +83,7 @@ class BaseTrainer(object):
         )
 
     def check_early_stopping(self, best_loss, best_model, best_epoch,
-    loss, i_epoch, early_stopping_patience=None):
+                             loss, i_epoch, early_stopping_patience=None):
         try:
             loss_ = loss[0]
         except:
@@ -204,7 +204,7 @@ class Trainer(BaseTrainer):
     def train(
         self,
         args,
-        loss_functions,
+        loss_functions=None,
         loss_weights=None,
         loss_labels=None,
         epochs=50,
@@ -279,6 +279,7 @@ class Trainer(BaseTrainer):
 
         early_stopping = early_stopping and (
             validation_split is not None) and (epochs > 1)
+
         best_loss, best_model, best_epoch = None, None, None
         if early_stopping and early_stopping_patience is None:
             logger.debug("Using early stopping with infinite patience")
@@ -291,6 +292,7 @@ class Trainer(BaseTrainer):
         n_losses = len(loss_labels)
         loss_weights = [1.0] * \
             n_losses if loss_weights is None else loss_weights
+
         # Print output according to verbose
         n_epochs_verbose = self._set_verbosity(epochs, verbose)
 
@@ -323,10 +325,10 @@ class Trainer(BaseTrainer):
                     train_loader,
                     val_loader,
                     opt,
-                    loss_functions,
                     loss_weights,
                     clip_gradient,
                     parameters,
+                    loss_functions=loss_functions,
                     forward_kwargs=forward_kwargs,
                     custom_kwargs=custom_kwargs,
                     compute_loss_variance=compute_loss_variance
@@ -381,10 +383,10 @@ class Trainer(BaseTrainer):
         train_loader,
         val_loader,
         optimizer,
-        loss_functions,
         loss_weights,
         clip_gradient,
         parameters,
+        loss_functions=None,
         forward_kwargs=None,
         custom_kwargs=None,
         compute_loss_variance=False,
@@ -399,8 +401,8 @@ class Trainer(BaseTrainer):
             if i_batch == 0 and i_epoch == 0:
                 self.first_batch(batch_data)
                 batch_loss, batch_loss_contributions = self.batch_train(
-                    i_batch, batch_data, loss_functions, loss_weights, optimizer, clip_gradient, 
-                    parameters, forward_kwargs=forward_kwargs, custom_kwargs=custom_kwargs
+                    i_batch, batch_data, loss_weights, optimizer, clip_gradient,
+                    parameters, loss_functions=loss_functions, forward_kwargs=forward_kwargs, custom_kwargs=custom_kwargs
                 )
             if compute_loss_variance:
                 loss_train.append(batch_loss)
@@ -410,7 +412,6 @@ class Trainer(BaseTrainer):
                 loss_contributions_train[i] += batch_loss_contribution
 
             self.report_batch(i_epoch, i_batch, True, batch_data, batch_loss)
-
 
         loss_contributions_train /= len(train_loader)
         if compute_loss_variance:
@@ -466,7 +467,7 @@ class Trainer(BaseTrainer):
         forward_kwargs=None,
         custom_kwargs=None,
         compute_loss_variance=False,
-        ):
+    ):
         if compute_loss_variance:
             raise NotImplementedError
 
@@ -540,7 +541,7 @@ class Trainer(BaseTrainer):
     def first_batch(self, batch_data):
         pass
 
-    def batch_train(self, i_batch, batch_data, loss_functions, loss_weights, optimizer, clip_gradient, parameters, forward_kwargs=None, custom_kwargs=None):
+    def batch_train(self, i_batch, batch_data, loss_weights, optimizer, clip_gradient, parameters, loss_functions=None, forward_kwargs=None, custom_kwargs=None):
         loss_contributions = self.forward_pass(
             i_batch,
             batch_data,
@@ -559,7 +560,7 @@ class Trainer(BaseTrainer):
 
     def batch_val(self, i_batch, batch_data, loss_functions, loss_weights, forward_kwargs=None, custom_kwargs=None):
         loss_contributions = self.forward_pass(
-            i_batch,batch_data, loss_functions, forward_kwargs=forward_kwargs, custom_kwargs=custom_kwargs)
+            i_batch, batch_data, loss_functions, forward_kwargs=forward_kwargs, custom_kwargs=custom_kwargs)
         loss = self.sum_losses(loss_contributions, loss_weights)
 
         loss = loss.item()
@@ -590,7 +591,7 @@ class Trainer(BaseTrainer):
         pass
 
 
-class ForwardTrainer(Trainer):
+class inn_vae_trainer(Trainer):
     """ Trainer for likelihood-based flow training when the model is not conditional. """
 
     def first_batch(self, batch_data):
@@ -618,16 +619,16 @@ class ForwardTrainer(Trainer):
         else:
             results = self.model(x, **forward_kwargs)
 
-        if intervention_inn == 'semantic_patch':
-            intervention_loss = self.intervention_on_patch(
-                label, intervented_patches, embedings_after_intervention)
+        # if intervention_inn == 'semantic_patch':
+        #     intervention_loss = self.intervention_on_patch(
+        #         label, intervented_patches, embedings_after_intervention)
 
-        if intervention_vae == 'semantic_attributes':
+        # if intervention_vae == 'semantic_attributes':
 
-        elif intervention_vae == 'semantic_nondiscriminative':
-            pass
-        elif intervention_vae == 'nondiscriminative':
-            pass
+        # elif intervention_vae == 'semantic_nondiscriminative':
+        #     pass
+        # elif intervention_vae == 'nondiscriminative':
+        #     pass
 
         if len(results) == 4:
             x_reco, log_prob, u, hidden = results
@@ -654,8 +655,16 @@ class ForwardTrainer(Trainer):
 
 
 class linear_classifier_trainer(Trainer):
-    def forward_pass(self, i_batch, batch_data, loss_functions, 
-    forward_kwargs=None, custom_kwargs=None):
+    def first_batch(self, batch_data):
+        if self.multi_gpu:
+            x, y = batch_data
+            if len(x.size()) < 2:
+                x = x.view(x.size(0), -1)
+            x = x.to(self.device, self.dtype)
+            self.model(x[: x.shape[0] // torch.cuda.device_count(), ...])
+
+    def forward_pass(self, i_batch, batch_data, loss_functions=None,
+                     forward_kwargs=None, custom_kwargs=None):
         if forward_kwargs is None:
             forward_kwargs = {}
 
@@ -668,42 +677,22 @@ class linear_classifier_trainer(Trainer):
         x = x.to(self.device, self.dtype)
 
         if self.multi_gpu:
-            results = nn.parallel.data_parallel(
+            loss_CE, attention_over_patches, attention_over_attributes, patchwise_attributes_score = nn.parallel.data_parallel(
                 self.model, x, module_kwargs=forward_kwargs)
         else:
-            results = self.model(x, **forward_kwargs)
+            loss_CE, attention_over_patches, attention_over_attributes, patchwise_attributes_score = self.model(
+                x, **forward_kwargs)
 
+        # if custom_kwargs["save_output"]==True:
+        #     output_dict = collections.defaultdict(list)
+        #     output_dict[label.item()].append(out)
 
-        if len(results) == 4:
-            x_reco, log_prob, u, hidden = results
-        else:
-            x_reco, log_prob, u = results
-            hidden = None
+        #     with open(f'./extracted_features_batch{i_batch}.plk', 'wb') as f:
+        #         pickle.dump(output_dict, f)
 
-        if custom_kwargs["save_output"]==True:
-            output_dict = collections.defaultdict(list)
-            output_dict[label.item()].append(out)
+        self._check_for_nans("loss_CE data", loss_CE, fix_until=5)
 
-            with open(f'./extracted_features_batch{i_batch}.plk', 'wb') as f:
-                pickle.dump(output_dict, f)
-
-
-        self._check_for_nans("Reconstructed data", x_reco, fix_until=5)
-        if log_prob is not None:
-            self._check_for_nans("Log likelihood", log_prob, fix_until=5)
-        if x.size(0) >= 15:
-            self.last_batch = {
-                "x": x.detach().cpu().numpy(),
-                "x_reco": x_reco.detach().cpu().numpy(),
-                "log_prob": None if log_prob is None else log_prob.detach().cpu().numpy(),
-                "u": u.detach().cpu().numpy(),
-            }
-
-        losses = [loss_fn(x_reco, x, log_prob, hidden=hidden)
-                  for loss_fn in loss_functions]
-        self._check_for_nans("Loss", *losses)
-
-        return losses
+        return loss_CE
 
 
 # class ConditionalForwardTrainer(Trainer):

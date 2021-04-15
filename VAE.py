@@ -9,7 +9,7 @@ from neural_ar_operations import ARConv2d
 from utils import get_stride_for_cell_type, get_input_size, groups_per_scale, get_arch_cells
 from distributions import Normal, DiscMixLogistic
 from inplaced_sync_batchnorm import SyncBatchNormSwish
-from inn_model import inn_classifier
+from inn_classifier import inn_classifier
 from models.flow.invertible_net import invertible_net
 import utils
 
@@ -121,10 +121,10 @@ class AutoEncoder(nn.Module):
         num_ci = self.in_chan_deter_enc
         for _ in range(self.num_deter_enc):
             conv = Conv2D(num_ci,
-                        num_ci / 2,
-                        kernel_size=3,
-                        padding=1,
-                        bias=True)
+                          num_ci / 2,
+                          kernel_size=3,
+                          padding=1,
+                          bias=True)
             num_ci /= 2
             deterministic_encoder.append(conv)
 

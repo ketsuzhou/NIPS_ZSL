@@ -195,7 +195,7 @@ def arg_parse():
         '--master_address',
         type=str,
         default='127.0.0.1',
-        help='address for master, master节点相当于参数服务器，其会向其他卡广播其参数,rank=0的进程就是master进程')
+        help='address for master, master节点相当于参数服务器，其会向其他卡广播其参数, rank=0的进程就是master进程')
 
     args = parser.parse_args()
     args.save = args.result_root + '/eval-' + args.save
