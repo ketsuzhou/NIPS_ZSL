@@ -53,11 +53,12 @@ class att_classifier(nn.Module):
     def __init__(self, dim_v, w2v_att, att, normalize_att, trainable_w2v=False,
                  non_linear_act=False, normalize_V=False, normalize_F=False):
 
-        # weight_path = 'https://pl-bolts-weights.s3.us-east-2.amazonaws.com/cpc/cpcv2_weights/checkpoints/epoch%3D526.ckpt'
-        # self.backbone = CPCV2.load_from_checkpoint(weight_path, strict=False)
+        weight_path = 'https://pl-bolts-weights.s3.us-east-2.amazonaws.com/cpc/cpcv2_weights/checkpoints/epoch%3D526.ckpt'
+        weight_path = 'https://pl-bolts-weights.s3.us-east-2.amazonaws.com/cpc/cpc-cifar10-v4-exp3/epoch%3D474.ckpt'
+        self.backbone = CPCV2.load_from_checkpoint(weight_path, strict=False)
 
-        self.backbone = CPCV2.load_from_checkpoint(
-            '/home/mu/.cache/torch/checkpoints/epoch%3D526.ckpt', strict=False)
+        # self.backbone = CPCV2.load_from_checkpoint(
+        #     '/home/mu/.cache/torch/checkpoints/epoch%3D526.ckpt', strict=False)
 
         self.dim_f = 2048
         self.dim_v = dim_v
