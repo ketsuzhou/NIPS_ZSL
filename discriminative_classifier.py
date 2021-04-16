@@ -57,13 +57,14 @@ class discriminative_classifier(nn.Module):
         self.backbone = CPCV2.load_from_checkpoint(weight_path, strict=False)
 
         self.dim_f = 2048
-        self.dim_v = dim_v
+        self.dim_v = 300
         self.dim_att = att.shape[1]
         self.nclass = att.shape[0]
         self.hidden = self.dim_att//2
         self.w2v_att = w2v_att
         self.non_linear_act = non_linear_act
         self.normalize_att = normalize_att
+        self.is_sigmoid = True
 
         self.W_1 = nn.Parameter(nn.init.normal_(
             torch.empty(self.dim_v, self.dim_f)), requires_grad=True)
@@ -93,7 +94,7 @@ class discriminative_classifier(nn.Module):
 
         return feature_map
 
-    def forward(self, inputs, labels):
+    def forward(self, inputs):
         feature_map = self.feature_extraction(inputs)
 
         shape = feature_map.shape
@@ -149,16 +150,11 @@ class discriminative_classifier(nn.Module):
         class_score = torch.sum(
             Wv_attented_over_attributes, axis=1)
 
-        # cross entropy loss
-        prob = nn.LogSoftmax(class_score, dim=1)
-        loss = - torch.einsum('bl, bl -> b', prob, labels)
-        loss_CE = torch.mean(loss)
-
         #
         predicted_attributes = torch.einsum(
             'av, vf, baf -> ba', V, self.W_1, Fm_attented_over_patches)
 
-        return loss_CE, attention_over_patches, attention_over_attributes, patchwise_attributes_score
+        return class_score, attention_over_patches, attention_over_attributes, patchwise_attributes_score
 
     def intervention_on_patches(self, labels, attention_over_attributes, attention_over_patches, patchwise_attributes_score):
         ################################################################

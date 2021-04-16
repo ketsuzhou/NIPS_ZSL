@@ -189,13 +189,22 @@ def fix_act_norm_issue(model):
 
 
 def make_training_kwargs(args):
+    dm = data_module(args)
+    if args.zsl_type == "conventional":
+        train_loader, val_loader = dm.conventional_dataloader()
+    elif args.zsl_type == "generalized":
+        train_loader, val_loader = dm.generalized_dataloader()
+    else:
+        NotImplementedError
+
     kwargs = {
-        "dataset": args.dataset,
         "batch_size": args.batch_size,
-        "initial_learning_rate": args.learning_rate,
+        "initial_lr": args.initial_learning_rate,
         "scheduler": optim.lr_scheduler.CosineAnnealingLR,
         "clip_gradient": args.clip,
         "seed": args.seed + args.run_number,
+        "train_loader": train_loader,
+        "val_loader": val_loader
     }
     if args.weight_decay is not None:
         kwargs["optimizer_kwargs"] = {"weight_decay": float(args.weight_decay)}

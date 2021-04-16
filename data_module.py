@@ -99,12 +99,13 @@ def split_byclass(seen_classes, unseen_classes, all_data_path, labels,
 class DataSet(data.Dataset):
     'Characterizes a dataset for PyTorch'
 
-    def __init__(self, image_dir, data_path, labels, transform):
+    def __init__(self, image_dir, data_path, labels, binary_class_attributes, transform):
         'Initialization'
         self.labels = labels
         self.data_path = data_path
         self.transform = transform
         self.image_dir = image_dir
+        self.binary_class_attributes = binary_class_attributes
 
     def __len__(self):
         'Denotes the total number of samples'
@@ -118,7 +119,8 @@ class DataSet(data.Dataset):
                          data_path_name).convert('RGB')
         img = self.transform(img)
         label = self.labels[data_path_name]
-        return img, label
+        binary_class_attributes = self.binary_class_attributes[label]
+        return img, label, binary_class_attributes
 
 
 def read_attribute(attributes_file):
@@ -145,13 +147,16 @@ class data_module():
         image_path2label = os.path.join(args.data_root, args.dataset,
                                         'image_labels.txt')
         binary_class_attributes_file = os.path.join(args.data_root, args.dataset,
-                                              'predicate-matrix-binary.txt')
+                                                    'predicate-matrix-binary.txt')
         continuous_class_attributes_file = os.path.join(args.data_root, args.dataset,
-                                                  'predicate-matrix-continuous.txt')
-        self.continuous_class_attributes = read_attribute(continuous_class_attributes_file)
-        self.binary_class_attributes = read_attribute(binary_class_attributes_file)
+                                                        'predicate-matrix-continuous.txt')
+        self.continuous_class_attributes = read_attribute(
+            continuous_class_attributes_file)
+        self.binary_class_attributes = read_attribute(
+            binary_class_attributes_file)
         self.num_classes = len(self.binary_class_attributes)
-        self.binary_class_attributes = torch.tensor(self.binary_class_attributes)
+        self.binary_class_attributes = torch.tensor(
+            self.binary_class_attributes)
 
 ################################################################
 
@@ -202,14 +207,14 @@ class data_module():
         self.train_params = {
             'batch_size': self.batch_size,
             'num_workers': self.num_workers,
-            'pin_memory': True,
+            'pin_memory': False,
             'shuffle': True,
             'sampler': None
         }
         self.test_params = {
             'batch_size': self.batch_size,
             'num_workers': self.num_workers,
-            'pin_memory': True,
+            'pin_memory': False,
             'sampler': None,
             'shuffle': False
         }
@@ -219,6 +224,7 @@ class data_module():
             DataSet(self.image_dir,
                     self.seen_data_path,
                     self.all_data_labels,
+                    self.binary_class_attributes,
                     self.train_transforms,
                     ), **self.train_params)
 
@@ -226,6 +232,7 @@ class data_module():
             DataSet(self.image_dir,
                     self.unseen_data_path,
                     self.all_data_labels,
+                    self.binary_class_attributes,
                     self.train_transforms
                     ), **self.test_params)
 
@@ -243,6 +250,7 @@ class data_module():
         dataset = DataSet(self.image_dir,
                           self.seen_data_path,
                           self.all_data_labels,
+                          self.binary_class_attributes,
                           self.train_transforms)
         seen_train_dataset, seen_test_dataset = self.random_split(
             dataset, test_fraction=0.5, split_seed=0)
@@ -252,6 +260,7 @@ class data_module():
         unseen_test_dataset = DataSet(self.image_dir,
                                       self.unseen_data_path,
                                       self.all_data_labels,
+                                      self.binary_class_attributes,
                                       self.test_transforms)
         test_dataset = ConcatDataset([seen_test_dataset, unseen_test_dataset])
         test_dataloader = data.DataLoader(test_dataset, **self.test_params)

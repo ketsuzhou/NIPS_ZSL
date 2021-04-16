@@ -203,8 +203,8 @@ class Trainer(BaseTrainer):
 
     def train(
         self,
-        args,
-        dataset,
+        train_loader,
+        val_loader,
         loss_functions=None,
         loss_weights=None,
         loss_labels=None,
@@ -248,14 +248,6 @@ class Trainer(BaseTrainer):
         logger.debug("Initialising training data")
         # train_loader, val_loader = self.make_dataloader(
         #     dataset, validation_split, batch_size)
-
-        dm = data_module(args)
-        if args.zsl_type == "conventional":
-            train_loader, val_loader = dm.conventional_dataloader()
-        elif args.zsl_type == "generalized":
-            train_loader, val_loader = dm.generalized_dataloader()
-        else:
-            NotImplementedError
 
         logger.debug("Setting up optimizer")
         optimizer_kwargs = {} if optimizer_kwargs is None else optimizer_kwargs
@@ -413,6 +405,7 @@ class Trainer(BaseTrainer):
                 loss_contributions_train[i] += batch_loss_contribution
 
             self.report_batch(i_epoch, i_batch, True, batch_data, batch_loss)
+            logger.info(f"end batch {i_batch}")
 
         loss_contributions_train /= len(train_loader)
         if compute_loss_variance:
@@ -658,7 +651,7 @@ class inn_vae_trainer(Trainer):
 class att_classifier_trainer(Trainer):
     def first_batch(self, batch_data):
         if self.multi_gpu:
-            x, y = batch_data
+            x, y, a = batch_data
             if len(x.size()) < 2:
                 x = x.view(x.size(0), -1)
             x = x.to(self.device, self.dtype)
@@ -670,7 +663,8 @@ class att_classifier_trainer(Trainer):
             forward_kwargs = {}
 
         x = batch_data[0]
-        label = batch_data[1]
+        labels = batch_data[1]
+        binary_class_attributes = batch_data[2]
         self._check_for_nans("Training data", x)
 
         if len(x.size()) < 2:
@@ -678,11 +672,16 @@ class att_classifier_trainer(Trainer):
         x = x.to(self.device, self.dtype)
 
         if self.multi_gpu:
-            loss_CE, attention_over_patches, attention_over_attributes, patchwise_attributes_score = nn.parallel.data_parallel(
+            class_score, attention_over_patches, attention_over_attributes, patchwise_attributes_score = nn.parallel.data_parallel(
                 self.model, x, module_kwargs=forward_kwargs)
         else:
-            loss_CE, attention_over_patches, attention_over_attributes, patchwise_attributes_score = self.model(
+            class_score, attention_over_patches, attention_over_attributes, patchwise_attributes_score = self.model(
                 x, **forward_kwargs)
+
+        # cross entropy loss
+        prob = torch.log_softmax(class_score, dim=1)
+        loss = - torch.einsum('bl, bl -> b', prob, binary_class_attributes)
+        loss_CE = [torch.mean(loss)]
 
         # if custom_kwargs["save_output"]==True:
         #     output_dict = collections.defaultdict(list)
@@ -691,7 +690,7 @@ class att_classifier_trainer(Trainer):
         #     with open(f'./extracted_features_batch{i_batch}.plk', 'wb') as f:
         #         pickle.dump(output_dict, f)
 
-        self._check_for_nans("loss_CE data", loss_CE, fix_until=5)
+        self._check_for_nans("Loss", *loss_CE)
 
         return loss_CE
 

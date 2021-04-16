@@ -34,7 +34,8 @@ def arg_parse():
 
     # data loader params
     parser.add_argument('--data_root',
-                        default='../../../media/data/',
+                        default='../data/',
+                        # default='../../../media/data/',
                         type=str,
                         metavar='DIRECTORY',
                         help='path to data directory')
@@ -126,9 +127,9 @@ def arg_parse():
     # optimization
     parser.add_argument('--batch_size',
                         type=int,
-                        default=1,
+                        default=100,
                         help='batch size per GPU')
-    parser.add_argument('--learning_rate',
+    parser.add_argument('--initial_learning_rate',
                         type=float,
                         default=1e-2,
                         help='init learning rate')
@@ -221,6 +222,7 @@ def pretraining_att_classifier(args, model):
     # logger.info("Starting training MF with specified manifold on NLL")
     learning_curves = att_trainer.train(
         epochs=args.epochs,
+        loss_labels=['cross_entropy_loss'],
         callbacks=[callbacks.save_model_after_every_epoch(
             create_filename("checkpoint", None, args))],
         forward_kwargs={},
