@@ -1,6 +1,6 @@
 {
     "git.ignoreLimitWarning": true,
-    "python.pythonPath": "/home/mu/anaconda3/envs/iin/bin/python",
+    "python.pythonPath": "/home/zhoujie/anaconda3/bin/python",
     "files.autoSaveDelay": 5000,
     "yaml.format.printWidth": 120,
     "editor.minimap.maxColumn": 180

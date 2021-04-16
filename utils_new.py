@@ -54,14 +54,12 @@ import torch.nn.functional as F
 from os import path
 import logging
 
-from trainers import linear_classifier_trainer
-
 
 logger = logging.getLogger(__name__)
 
 
 def create_filename(type_, label, args):
-    run_label = "_run{}".format(args.i) if args.i > 0 else ""
+    run_label = "_run{}".format(args.run_number) if args.run_number > 0 else ""
 
     if type_ == "dataset":  # Fixed datasets
         filename = "{}/data/samples/{}".format(args.dir, args.dataset)
@@ -130,29 +128,11 @@ def create_filename(type_, label, args):
     return filename
 
 
-def create_modelname(args):
-    run_label = "_run{}".format(args.i) if args.i > 0 else ""
-    appendix = "" if args.modelname is None else "_" + args.modelname
+def create_modelname(args, model_name):
+    run_label = "_run{}".format(args.run_number) if args.run_number > 0 else ""
 
-    try:
-        if args.truth:
-            if args.dataset in ["spherical_gaussian", "conditional_spherical_gaussian"]:
-                args.modelname = "truth_{}_{}_{}_{:.3f}{}{}".format(
-                    args.dataset, args.truelatentdim, args.datadim, args.epsilon, appendix, run_label)
-            else:
-                args.modelname = "truth_{}{}{}".format(
-                    args.dataset, appendix, run_label)
-            return
-    except:
-        pass
-
-    if args.dataset in ["spherical_gaussian", "conditional_spherical_gaussian"]:
-        args.modelname = "{}{}_{}_{}_{}_{}_{:.3f}{}{}".format(
-            args.algorithm, "_specified" if args.specified else "", args.modellatentdim, args.dataset, args.truelatentdim, args.datadim, args.epsilon, appendix, run_label,
-        )
-    else:
-        args.modelname = "{}{}_{}_{}{}{}".format(
-            args.algorithm, "_specified" if args.specified else "", args.modellatentdim, args.dataset, appendix, run_label)
+    args.modelname = "{}_{}_{}".format(
+        model_name, args.dataset, run_label)
 
 
 def nat_to_bit_per_dim(dim):
@@ -206,3 +186,35 @@ def fix_act_norm_issue(model):
 
     for _, submodel in model._modules.items():
         fix_act_norm_issue(submodel)
+
+
+def make_training_kwargs(args):
+    kwargs = {
+        "dataset": args.dataset,
+        "batch_size": args.batch_size,
+        "initial_learning_rate": args.learning_rate,
+        "scheduler": optim.lr_scheduler.CosineAnnealingLR,
+        "clip_gradient": args.clip,
+        "seed": args.seed + args.run_number,
+    }
+    if args.weight_decay is not None:
+        kwargs["optimizer_kwargs"] = {"weight_decay": float(args.weight_decay)}
+
+    return kwargs
+
+
+def read_attribute():
+    class_path = './AWA2_attribute.pkl'
+    with open(class_path, 'rb') as f:
+        w2v = pickle.load(f)
+
+    w2v = torch.tensor(w2v).float()
+    U, s, V = torch.svd(w2v)
+    # reconstruct = torch.mm(torch.mm(U,torch.diag(s)),torch.transpose(V,1,0))
+
+    w2v_att = torch.transpose(V, 1, 0)
+    att = torch.mm(U, torch.diag(s))
+    normalize_att = torch.mm(U, torch.diag(s))
+    dim_v = V.size(1)
+
+    return dim_v, w2v_att, att, normalize_att

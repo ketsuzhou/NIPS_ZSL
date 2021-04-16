@@ -204,6 +204,7 @@ class Trainer(BaseTrainer):
     def train(
         self,
         args,
+        dataset,
         loss_functions=None,
         loss_weights=None,
         loss_labels=None,
@@ -654,7 +655,7 @@ class inn_vae_trainer(Trainer):
         return losses
 
 
-class linear_classifier_trainer(Trainer):
+class att_classifier_trainer(Trainer):
     def first_batch(self, batch_data):
         if self.multi_gpu:
             x, y = batch_data
